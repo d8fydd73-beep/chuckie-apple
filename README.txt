@@ -33,7 +33,9 @@ RETURN    throw a ball
 HOW TO PLAY
 -----------
 Dig through the stuff. Get all six apples off the screen through the three
-arrow chutes and the exit opens - walk out of it to finish the level.
+arrow chutes, and clear away every crate and golden apple too - then the exit
+opens. Walk out of it to finish the level. (A crate shoved out of a side
+chute is away for a couple of seconds - the exit is open until it's back.)
 
 * Undermine an apple and it falls - onto monsters, if you time it right.
   An apple landing on another apple smashes the lower one (that counts!).
@@ -50,12 +52,42 @@ arrow chutes and the exit opens - walk out of it to finish the level.
   chute to earn a ball (hold up to three). It turns up again elsewhere.
   A crate stuck at the bottom can be shoved out of a side chute.
 * A ball bounces round the tunnels and kills the first monster it meets.
-  Hit a crate with it and it becomes a GOLDEN APPLE - 1000 points out of
-  any chute.
+  Hit a crate with it and it becomes a GOLDEN APPLE - get it out of any
+  chute for an EXTRA LIFE (up to 9).
 * Anything pushed, lifted, dropped or kicked into a monster squashes it.
 * UXB apples (orange) turn up now and then with a 10 second fuse. Walk into
   one to defuse it. Leave it and it blows a crater - and you, if you're close.
 * Watch the TIME. An extra life every 10,000 points.
+
+
+POKES
+-----
+In true 8-bit tradition you can change how the game plays. Load it without
+running it, poke new values in, then start it:
+
+    *LOAD APPLE              (disc)   or   *TAPE then *LOAD ""   (tape)
+    ?&2D79=75
+    CALL &4218
+
+  ?&2D79=n   How long a crate stays away after you shove it out of a
+             chute, in 25ths of a second. Normally 50 (2 seconds). If you
+             can't escape before the last crate comes back, try 75 (3 s)
+             or 125 (5 s). Up to 255.
+  ?&1945=n   Lives at the start, 1-9. Normally 5.
+  ?&194F=n   Balls at the start, 0-3. Normally 0.
+  ?&2FB3=n   Speed of the cyan monster. Normally 80; lower is slower.
+  ?&2FB4=n   Speed of the red monster. Normally 112.
+  ?&2FB5=n   Speed of the digger. Normally 56. (Keep all three under 200.)
+  ?&22BF=n   Hundreds digit of the TIME you start each life with, 1-9.
+             Normally 9.
+  ?&345B=0 and ?&345C=0   Silence the footsteps.
+
+  To turn off all sound, type *FX210,1 before starting the game
+  (*FX210,0 turns it back on).
+
+To keep your changes, save it after poking (disc):
+
+    *SAVE APPLE FFFF1900 +293D FFFF4218
 
 
 SOURCE
