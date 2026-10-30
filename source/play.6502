@@ -176,7 +176,19 @@
     LDA tx,X : CLC : ADC sdx : STA tx,X
 .nopull
     INC manim
-    LDA manim : AND #1 : BNE quiet       \ pitter-patter
+    \ pitter-patter, the Chuckie Egg way: the note depends on what he's
+    \ doing - walking, climbing, going down - each foot a little
+    \ different, and an octave lower when he's digging
+    LDX mdir
+    LDY mspeed : CPY #DIGSPEED : BEQ crunch  \ every bit of digging crunches
+    LDA manim : AND #1 : BNE quiet           \ walking: every other step
+    LDA manim : AND #2 : ASL A : ASL A       \ 0 or 8: left foot, right foot
+    ADC steppitch,X
+    JMP stp
+.crunch
+    LDA steppitch,X : LSR A
+.stp
+    STA snd_step+4
     LDX #snd_step-sounds : JSR sound
 .quiet
     LDA mdir : CMP #D_DOWN : BCS wasv
@@ -265,9 +277,7 @@
     LDA sdy : BEQ side
     LDA #0 : STA tvy,X : STA tyf,X
 .side
-    JSR rectmon : BCC nok               \ pushed or lifted into a monster:
-    JSR killmon                         \ squashed
-.nok
+    JSR squash                          \ pushed or lifted into a monster
     JSR dig
 .nx LDX t8 : INX : CPX nchain : BNE l
     RTS
@@ -278,16 +288,17 @@
     LDA keys : AND #K_KICK : BEQ go     \ SPACE held: leave it behind
     RTS
 .go LDX #NTHINGS-1
-.l  STX t7
+.l  STX t8
     JSR onhead : BCC n
     LDA tx,X : CLC : ADC sdx : STA rx : LDA ty,X : STA ry
     JSR rectmap : AND #P_BLOCKOBJ+P_GATE : BNE n
-    LDX t7 : LDA #1 : STA tmark,X
+    LDX t8 : LDA #1 : STA tmark,X
     JSR rectobj
-    LDX t7 : LDA #0 : STA tmark,X
+    LDX t8 : LDA #0 : STA tmark,X
     BCS n
     LDA rx : STA tx,X
-.n  LDX t7 : DEX : BPL l
+    JSR squash                          \ carried into a monster
+.n  LDX t8 : DEX : BPL l
     RTS
 }
 
@@ -611,7 +622,7 @@
     DEC ti : BMI fin
     JMP loop
 .fin
-    RTS
+    JMP checkexit
 }
 
 .physics
@@ -711,8 +722,7 @@
     LDX ti : LDA #0 : STA tvy,X
     SEC : RTS
 .noobj
-    JSR rectmon : BCC free
-    JSR killmon
+    JSR squash
 .free
     LDX ti
     LDA nnx : STA tx,X : LDA nny : STA ty,X
@@ -808,9 +818,11 @@
     LDX #snd_life-sounds : JMP sound
 .notcrate
     CMP #T_GOLD : BNE apple
-    LDA #T_NONE : STA tt,X              \ gold: 1000 points, not counted
-    LDA #&00 : LDX #&10 : JSR addscore
-    LDX #snd_gold-sounds : JMP sound
+    LDA #T_NONE : STA tt,X              \ gold: an extra life (up to 9)
+    LDA lives : CMP #9 : BCS maxed
+    INC lives : JSR printlives
+.maxed
+    LDX #snd_life-sounds : JMP sound
 .apple
     LDA #T_NONE : STA tt,X
     LDA #&50 : LDX #&02 : JSR addscore  \ 250
@@ -843,7 +855,7 @@
     LDX #LO(msg_super) : LDY #HI(msg_super) : JSR prtext
     LDX #snd_super-sounds : JSR sound
 .open
-    JMP openexit
+    RTS
 .again
     \ not above level 17: the apples go back where they started
     LDA lay : ASL A : ASL A : ASL A : TAY
@@ -911,11 +923,28 @@
 .ag JMP again
 }
 
-.openexit
-    LDA #1 : STA exitopen
-    LDX #39 : LDY exitr : LDA #C_EXITOPEN : JSR setcell
-    INY : LDA #C_EXITOPEN : JSR setcell
+.checkexit
+\ the exit is open only while all six apples are out and there's no crate
+\ or gold left on the screen - a crate on its way back doesn't count, so
+\ shove the last one out of a side chute and run for it
+{
+    LDA #0
+    LDX tally : CPX #NAPPLES : BCC set
+    LDX #NTHINGS-1
+.l  LDY tt,X : CPY #T_GOLD : BCC n
+    CPY #T_BANG : BCC set               \ a crate or gold: shut
+.n  DEX : BPL l
+    LDA #1
+.set
+    CMP exitopen : BEQ r
+    STA exitopen
+    CLC : ADC #C_EXIT : STA t9          \ C_EXIT, or C_EXITOPEN after it
+    LDX #39 : LDY exitr : JSR setcell
+    INY : LDA t9 : JSR setcell
+    LDA exitopen : BEQ r
     LDX #snd_open-sounds : JMP sound
+.r  RTS
+}
 
 \ ===========================================================================
 \  Monsters: A and B follow the tunnels, C digs. They come out of the cup.
@@ -937,6 +966,7 @@
     DEC hk : BPL loop
     RTS
 }
+.steppitch EQUB 90, 90, 110, 130      \ right, left, down, up
 .monspeed EQUB 80, 112, 56
 .monmask  EQUB P_BLOCKMAN+P_DIG+P_EXIT, P_BLOCKMAN+P_DIG+P_EXIT, P_BLOCKMAN+P_EXIT
 
@@ -1044,6 +1074,8 @@
     RTS
 }
 
+.squash                 \ a thing moved to rx,ry: anything there dies
+    JSR rectmon : BCS killmon : RTS
 .killmon                \ X = monster
     LDA #2 : STA nst,X : LDA #10 : STA ntim,X
     LDA #&00 : LDX #&05 : JSR addscore          \ 500

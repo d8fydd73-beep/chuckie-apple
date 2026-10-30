@@ -796,7 +796,7 @@ INCLUDE "play.6502"
 .snd_die   EQUW &11 : EQUW &FFF1 : EQUW 100 : EQUW 2
 .snd_count EQUW &13 : EQUW &FFF6 : EQUW 220 : EQUW 1
 .snd_super EQUW &11 : EQUW &FFF1 : EQUW 250 : EQUW 20
-.snd_step  EQUW &13 : EQUW &FFF9 : EQUW 150 : EQUW 1
+.snd_step  EQUW &13 : EQUW &FFFC : EQUW 100 : EQUW 1   \ pitch set as he walks
 .snd_throw EQUW &12 : EQUW &FFF6 : EQUW 180 : EQUW 2
 .snd_gold  EQUW &11 : EQUW &FFF1 : EQUW 240 : EQUW 6
 .snd_life  EQUW &11 : EQUW &FFF1 : EQUW 228 : EQUW 10
@@ -818,10 +818,10 @@ INCLUDE "play.6502"
 \ ===========================================================================
 .scrrowlo FOR r,0,NROWS-1 : EQUB LO(SCREEN + r*640) : NEXT
 .scrrowhi FOR r,0,NROWS-1 : EQUB HI(SCREEN + r*640) : NEXT
-\ map rows: the status rows point at a row of zeros
-.maprowlo FOR r,0,NROWS-1 : IF r < TOPROW : EQUB LO(zerorow) : ELSE : EQUB LO(MAP + (r-TOPROW)*40) : ENDIF : NEXT
-.maprowhi FOR r,0,NROWS-1 : IF r < TOPROW : EQUB HI(zerorow) : ELSE : EQUB HI(MAP + (r-TOPROW)*40) : ENDIF : NEXT
-.zerorow FOR i,1,40 : EQUB 0 : NEXT
+\ map rows (the status rows above the playfield are never looked at; they
+\ point at the top wall's row, which is solid, just in case)
+.maprowlo FOR r,0,NROWS-1 : IF r < TOPROW : EQUB LO(MAP) : ELSE : EQUB LO(MAP + (r-TOPROW)*40) : ENDIF : NEXT
+.maprowhi FOR r,0,NROWS-1 : IF r < TOPROW : EQUB HI(MAP) : ELSE : EQUB HI(MAP + (r-TOPROW)*40) : ENDIF : NEXT
 .sprlo FOR f,0,19 : EQUB LO(sprites + f*64) : NEXT
 .sprhi FOR f,0,19 : EQUB HI(sprites + f*64) : NEXT
 
@@ -847,11 +847,10 @@ INCLUDE "play.6502"
     EQUB 4,15,5,0 : EQUS "SPACE KICK    RETURN THROW BALL",0
     EQUB 4,17,6,0 : EQUS "WALK UNDER AN APPLE TO CARRY IT",0
     EQUB 2,18,6,0 : EQUS "GET ALL SIX APPLES OUT THROUGH THE",0
-    EQUB 3,19,6,0 : EQUS "ARROW CHUTES AND THE EXIT OPENS",0
+    EQUB 3,19,6,0 : EQUS "CHUTES. CLEAR THE CRATES TO EXIT",0
     EQUB 2,20,3,0 : EQUS "HOLD SPACE, WALK AWAY TO PULL A",0
     EQUB 1,21,3,0 : EQUS "CRATE. CARRY ONE OUT OF THE TOP FOR",0
     EQUB 1,22,3,0 : EQUS "A BALL. BALL A CRATE FOR GOLD!",0
-    EQUB 6,23,1,0 : EQUS "GRAB A UXB BEFORE IT BLOWS!",0
     EQUB 11,25,2,0 : EQUS "HIGH SCORE",0
     EQUB 10,27,3,0 : EQUS "PRESS",0
     EQUB 16,27,6,0 : EQUS "SPACE",0

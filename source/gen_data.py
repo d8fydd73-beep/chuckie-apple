@@ -352,9 +352,9 @@ def twin():
     L.carve(19, 1, 2, 6)                          # from the top chute
     L.carve(1, 3, 5, 2)                           # entrance corridor
     L.carve(1, 22, 5, 2); L.carve(34, 22, 5, 2)   # bottom corners
-    L.carve(35, 3, 4, 2)                          # exit pocket
+    L.carve(34, 16, 5, 2)                         # exit pocket: the lower corridor runs into it
     L.carve(19, 9, 2, 7)                          # the cup opens on both corridors
-    L.gates(); L.doors(3, 3); L.cup(19, 11)
+    L.gates(); L.doors(3, 16); L.cup(19, 11)
     for c, r in [(12, 4), (25, 4), (10, 13), (27, 13), (15, 19), (24, 19)]: L.apple(c, r)
     L.box(2, 13); L.box(36, 13)
     return L.check()
