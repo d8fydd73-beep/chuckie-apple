@@ -1,0 +1,915 @@
+\ ===========================================================================
+\  CHUCKIE APPLE  (version 2)  -  for the BBC Micro Model B
+\
+\  From the original design by Nigel Alderton (1983), released by him
+\  under the Creative Commons Attribution 2.5 licence via The Chuckie Egg
+\  Professional's Resource Kit (bagshot-row.org/chuckie-egg).
+\  This BBC version by D8fydd-Beep, 2026: 6502 machine code, assembled
+\  with BeebAsm.
+\
+\  Keys:  Z left   X right   : up   / down   SPACE kick   RETURN ball
+\
+\  Memory, once it's running (the same trick Chuckie Egg uses):
+\    &0000-&008F  variables
+\    &0880-&08FF  some variables (the printer buffer and ENVELOPE store)
+\    &0900-&0CE7  MAP: the level, one byte per cell (40 x 25)
+\    &0E00-&377F  this program - it loads at &1900, then copies itself
+\                 down here, over the filing system's workspace
+\    &3780-&7FFF  the screen: MODE 2, 160 x 232 (29 character rows)
+\ ===========================================================================
+
+INCLUDE "consts.6502"
+
+OSWRCH = &FFEE
+OSWORD = &FFF1
+OSBYTE = &FFF4
+EVNTV  = &0220          \ the OS calls through here for events
+
+SCREEN = &3780          \ 29 rows of 640 bytes, ending at &7FFF
+NROWS  = 29
+TOPROW = 4              \ the playfield starts on this character row
+MAP    = &0900          \ playfield rows 4-28 only: 25 x 40 = 1000 bytes
+RUNADDR  = &0E00        \ where the program runs
+LOADADDR = &1900        \ where the file loads
+
+\ thing types: 1-3 are solid, 1-2 behave as apples
+T_NONE = 0 : T_APPLE = 1 : T_GOLD = 2 : T_BOX = 3
+T_BANG = 4              \ exploding, then gone for good
+T_KBANG = 5             \ exploding after a kick, will come back
+T_WAIT = 6              \ invisible, waiting for the man to walk through
+T_REFORM = 7            \ exploding in reverse
+T_GHOST = 8             \ outline, waiting for the man to get out of the way
+T_CRWAIT = 9            \ a delivered crate, about to turn up somewhere else
+
+D_RIGHT = 0 : D_LEFT = 1 : D_DOWN = 2 : D_UP = 3
+K_RIGHT = 1 : K_LEFT = 2 : K_DOWN = 4 : K_UP = 8 : K_KICK = 16 : K_BALL = 32
+
+F_APPLE = 6 : F_BOX = 7 : F_GHOST = 8 : F_BANG = 9 : F_MON = 11
+F_GOLD = 17 : F_BALL = 18 : F_UXB = 19
+NOSPR = &FF
+
+NMON = 3
+NSLOTS = 1 + NTHINGS + NMON + 2
+SLOT_THING = 1
+SLOT_MON = 1 + NTHINGS
+SLOT_BALL = SLOT_MON + NMON
+SLOT_UXB = SLOT_BALL + 1
+MAXPEND = 32
+
+\ physics, in 1/32 of a byte (x) and 1/16 of a line (y) per frame
+GRAV   = 4
+MAXVY  = 112
+KICKVX = 32
+KICKVY = 64
+FRIC   = 1
+TIPV   = 12
+TOSSVY = 24
+POPVY  = 40             \ SPACE with an apple on your head pops it up
+
+MSPEED   = 176          \ man in a tunnel
+DIGSPEED = 112          \ man digging
+BALLLIFE = 200          \ frames a ball keeps bouncing
+MAXBALLS = 3            \ most balls you can carry
+CRATEBACK = 50          \ frames before a delivered crate reappears
+
+\ ---------------------------------------------------------------------------
+\ Zero page
+\ ---------------------------------------------------------------------------
+ORG &00
+.t0  SKIP 1 : .t1 SKIP 1 : .t2 SKIP 1 : .t3 SKIP 1
+.t4  SKIP 1 : .t5 SKIP 1 : .t6 SKIP 1 : .t7 SKIP 1
+.t8  SKIP 1 : .t9 SKIP 1 : .t10 SKIP 1 : .t11 SKIP 1
+.ptr  SKIP 2 : .scr SKIP 2 : .sptr SKIP 2 : .base SKIP 2 : .tp SKIP 2
+.px SKIP 1 : .py SKIP 1 : .bx SKIP 1 : .by SKIP 1
+.sidx SKIP 1 : .ccount SKIP 1 : .rowm SKIP 1
+.tcol SKIP 1 : .trow SKIP 1 : .tfg SKIP 1 : .tbg SKIP 1
+.gbuf SKIP 4 : .pairtab SKIP 4
+.rx SKIP 1 : .ry SKIP 1
+.c0 SKIP 1 : .c1 SKIP 1 : .r1 SKIP 1 : .rr SKIP 1 : .acc SKIP 1
+.keys SKIP 1 : .oldkeys SKIP 1
+.vcount SKIP 1 : .oldev SKIP 2
+.frame SKIP 1 : .seed SKIP 2
+.mx SKIP 1 : .my SKIP 1 : .mdir SKIP 1 : .mlasth SKIP 1 : .mlastv SKIP 1
+.macc SKIP 1 : .manim SKIP 1 : .mwasup SKIP 1 : .mspeed SKIP 1
+.sdx SKIP 1 : .sdy SKIP 1 : .nnx SKIP 1 : .nny SKIP 1
+.score SKIP 3 : .high SKIP 3
+.bonus SKIP 2 : .btick SKIP 1
+.time SKIP 2 : .ttick SKIP 1    \ TIME, BCD
+.lives SKIP 1 : .level SKIP 1 : .levbin SKIP 1 : .lay SKIP 1
+.tally SKIP 1 : .train SKIP 1 : .superflag SKIP 1
+.exitopen SKIP 1 : .levdone SKIP 1
+.pendn SKIP 1
+.ti SKIP 1 : .tj SKIP 1 : .smask SKIP 1 : .scnt SKIP 1 : .nsteps SKIP 1
+.hk SKIP 1 : .nchain SKIP 1
+.tx  SKIP NTHINGS : .ty SKIP NTHINGS
+.tvx SKIP NTHINGS : .tvy SKIP NTHINGS : .tt SKIP NTHINGS
+.zpend
+PRINT "Zero page used up to", ~zpend
+ASSERT zpend <= &90
+
+\ ===========================================================================
+ORG RUNADDR
+.start
+    LDA #229 : LDX #1 : LDY #0 : JSR OSBYTE      \ ESCAPE does nothing
+    LDA #&5A : STA seed : LDA #&C3 : STA seed+1
+    JSR setscreen
+    SEI                                          \ count vsyncs ourselves
+    LDA EVNTV : STA oldev : LDA EVNTV+1 : STA oldev+1
+    LDA #LO(evhandler) : STA EVNTV : LDA #HI(evhandler) : STA EVNTV+1
+    CLI
+    LDA #14 : LDX #4 : JSR OSBYTE                \ *FX14,4: vsync event on
+    LDA #0 : STA high : STA high+1 : STA high+2
+
+.titleloop
+    JSR titlescreen
+
+.newgame
+    LDA #0 : STA score : STA score+1 : STA score+2
+    LDA #5 : STA lives
+    LDA #1 : STA level : STA levbin
+    LDA #0 : STA balls                          \ balls carry over between levels
+
+.newlevel
+    JSR setuplevel
+.getready
+    LDX #LO(msg_ready) : LDY #HI(msg_ready) : JSR prtext
+    JSR render
+    LDA #75 : JSR pause
+    LDX #LO(msg_blank) : LDY #HI(msg_blank) : JSR prtext
+    LDA #0 : STA vcount
+
+\ ===========================================================================
+\  Main loop: one pass per game frame, 25 a second
+\ ===========================================================================
+.mainloop
+    LDA vcount : CMP #2 : BCC mainloop
+    LDA #0 : STA vcount
+    JSR readkeys
+    JSR updman
+    JSR updthings
+    JSR updball
+    JSR upduxb
+    JSR updmons
+    JSR spawn
+    JSR timer
+    JSR setwanted
+    JSR render
+    JSR rnd
+    INC frame
+    JSR checkhit
+    BCS died
+    LDA boom : BNE died                        \ caught in a UXB blast
+    LDA time : ORA time+1 : BEQ died           \ out of time
+    LDA levdone : BNE complete
+    JMP mainloop
+.died
+    JMP die
+.complete
+    JMP levelcomplete
+
+\ the OS calls this for every event; 4 is vsync. Leaves A, X, Y alone.
+.evhandler
+    PHP
+    CMP #4 : BNE notv
+    INC vcount
+.notv
+    PLP
+    JMP (oldev)
+
+\ ===========================================================================
+\  Screen set-up. We program the video chips directly rather than asking
+\  the OS for MODE 2 (which would clear &3000 upwards).
+\ ===========================================================================
+.setscreen
+{
+    JSR clearscreen
+    LDA #154 : LDX #&F4 : JSR OSBYTE  \ video ULA: MODE 2
+    LDA #0 : STA t0
+.pal                                  \ palette: colour n is colour n
+    LDA t0 : ASL A : ASL A : ASL A : ASL A : ORA t0 : TAX
+    LDA #155 : JSR OSBYTE             \ (8-15 are the flashing ones)
+    INC t0 : LDA t0 : CMP #16 : BNE pal
+    LDX #0
+.loop
+    LDA crtctab,X : CMP #&FF : BEQ done
+    STA &FE00 : LDA crtctab+1,X : STA &FE01
+    INX : INX : BNE loop
+.done
+    RTS
+}
+.crtctab
+    EQUB 0,127, 1,80, 2,98, 3,&28   \ MODE 2's horizontal timing
+    EQUB 4,38, 5,0
+    EQUB 6,NROWS                    \ 29 character rows (MODE 2 has 32)
+    EQUB 7,33                       \ vsync earlier to centre them
+    EQUB 8,1, 9,7, 10,&20, 11,8     \ no cursor
+    EQUB 12,HI(SCREEN DIV 8), 13,LO(SCREEN DIV 8)
+    EQUB &FF
+
+.clearscreen
+{
+    LDA #LO(SCREEN) : STA scr : LDA #HI(SCREEN) : STA scr+1
+    LDA #0 : TAY
+.loop
+    STA (scr),Y : INY : BNE loop
+    INC scr+1 : LDX scr+1 : CPX #&80 : BNE loop
+    RTS
+}
+
+\ ===========================================================================
+\  Screen addresses: rows are 640 bytes, so we look the row up in a table
+\ ===========================================================================
+.byteaddr               \ bx (0-79), by (line) -> scr
+    LDA by : LSR A : LSR A : LSR A : TAY
+    LDA bx : LSR A : LSR A : LSR A : LSR A : LSR A : STA scr+1   \ bx*8, high
+    LDA bx : ASL A : ASL A : ASL A : STA scr                      \ bx*8, low
+    LDA by : AND #7 : ORA scr
+    CLC : ADC scrrowlo,Y : STA scr
+    LDA scr+1 : ADC scrrowhi,Y : STA scr+1
+    RTS
+
+.celladdr               \ tcol (0-39), trow (0-28) -> scr
+    LDY trow
+    LDA tcol : LSR A : LSR A : LSR A : LSR A : STA scr+1         \ col*16, high
+    LDA tcol : ASL A : ASL A : ASL A : ASL A                      \ col*16, low
+    CLC : ADC scrrowlo,Y : STA scr
+    LDA scr+1 : ADC scrrowhi,Y : STA scr+1
+    RTS
+
+\ copy 16 bytes from tp to the cell at X, Y
+.blitcell
+{
+    STX tcol : STY trow : JSR celladdr
+    LDY #15
+.loop
+    LDA (tp),Y : STA (scr),Y : DEY : BPL loop
+    LDX tcol : LDY trow
+    RTS
+}
+
+\ ===========================================================================
+\  The map
+\ ===========================================================================
+\ getcell: X = column, Y = screen row -> A = code. Keeps X and Y.
+.getcell
+    LDA maprowlo,Y : STA ptr : LDA maprowhi,Y : STA ptr+1
+    STY t11 : TXA : TAY : LDA (ptr),Y : LDY t11
+    RTS
+
+\ setcell: X = column, Y = row, A = new code; the cell is redrawn later
+.setcell
+{
+    PHA : JSR getcell
+    STY t11 : TXA : TAY : PLA : STA (ptr),Y : LDY t11
+    STX t10
+    LDX pendn : CPX #MAXPEND : BCS full
+    LDA t10 : STA pendc,X : TYA : STA pendr,X
+    INC pendn
+.full
+    LDX t10
+    RTS
+}
+
+\ drawcell: X = column, Y = row
+.drawcell
+    JSR getcell
+    ASL A : ASL A : ASL A : ASL A                 \ code = picture number
+    CLC : ADC #LO(tiles) : STA tp : LDA #HI(tiles) : ADC #0 : STA tp+1
+    JMP blitcell
+
+\ unpack the level into MAP (each byte: count in the top 4 bits, cell code
+\ in the bottom 4) and draw it
+.drawmap
+{
+    LDX lay : LDA levlo,X : STA tp : LDA levhi,X : STA tp+1
+    LDA #LO(MAP) : STA ptr : LDA #HI(MAP) : STA ptr+1
+.next
+    LDY #0 : LDA (tp),Y
+    INC tp : BNE n1 : INC tp+1
+.n1 PHA : AND #15 : STA t0
+    PLA : LSR A : LSR A : LSR A : LSR A : TAX
+.put
+    LDA t0 : STA (ptr),Y
+    INC ptr : BNE n2 : INC ptr+1
+.n2 DEX : BNE put
+    LDA ptr : CMP #LO(MAP+1000) : BNE next
+    LDA ptr+1 : CMP #HI(MAP+1000) : BNE next
+    LDY #TOPROW
+.row
+    LDX #0
+.col
+    JSR drawcell
+    INX : CPX #40 : BNE col
+    INY : CPY #NROWS : BNE row
+    RTS
+}
+
+\ rectmap: OR together the properties of every cell under the
+\ 4-byte x 16-line rectangle at rx, ry
+.rectmap
+{
+    LDA rx : LSR A : STA c0
+    LDA rx : CLC : ADC #3 : LSR A : STA c1
+    LDA ry : LSR A : LSR A : LSR A : STA rr
+    LDA ry : CLC : ADC #15 : LSR A : LSR A : LSR A : STA r1
+    LDA #0 : STA acc
+.row
+    LDX rr : LDA maprowlo,X : STA ptr : LDA maprowhi,X : STA ptr+1
+    LDY c0
+.col
+    LDA (ptr),Y : TAX : LDA props,X : ORA acc : STA acc
+    INY : CPY c1 : BEQ col : BCC col
+    INC rr : LDA rr : CMP r1 : BEQ row : BCC row
+    LDA acc
+    RTS
+}
+
+\ dig: empty any stuff under the rectangle rx, ry
+\ digman: the same, and the man collects the cup
+.digman
+    LDA #P_DIG+P_CUP : JMP dig2
+.dig
+    LDA #P_DIG
+.dig2
+{
+    STA t7
+    JSR rectmap : AND t7 : BNE some
+    RTS
+.some
+    LDA ry : LSR A : LSR A : LSR A : STA rr
+.row
+    LDX c0
+.col
+    LDY rr : JSR getcell
+    CMP #C_STUFF : BNE notstuff
+    LDA #C_EMPTY : JSR setcell
+    JMP next
+.notstuff
+    CMP #C_CUP : BCC next
+    LDA t7 : AND #P_CUP : BEQ next
+    JSR getcup
+.next
+    INX : CPX c1 : BEQ col : BCC col
+    INC rr : LDA rr : CMP r1 : BEQ row : BCC row
+    RTS
+}
+
+.getcup                 \ take all four quarters of the cup: 1000 points
+    STX t9 : STY t8
+    LDX cupc : LDY cupr : LDA #0 : JSR setcell
+    INX : LDA #0 : JSR setcell
+    INY : LDA #0 : JSR setcell
+    DEX : LDA #0 : JSR setcell
+    LDA #&00 : LDX #&10 : JSR addscore
+    LDX #snd_cup-sounds : JSR sound
+    LDX t9 : LDY t8
+    RTS
+
+\ ===========================================================================
+\  Sprites: EOR a 4-byte x 16-line picture at px, py
+\ ===========================================================================
+.plotf                  \ A = frame
+    TAX : LDA sprlo,X : STA sptr : LDA sprhi,X : STA sptr+1
+.plot
+{
+    LDA px : STA bx : LDA py : STA by : JSR byteaddr
+    LDA scr : STA base : LDA scr+1 : STA base+1
+    LDA #0 : STA sidx
+    LDA #4 : STA ccount
+.column
+    LDA base : STA scr : LDA base+1 : STA scr+1
+    LDA py : AND #7 : STA rowm
+    LDX #16
+.row
+    LDY sidx : INC sidx
+    LDA (sptr),Y : BEQ skip
+    LDY #0 : EOR (scr),Y : STA (scr),Y
+.skip
+    INC rowm : LDA rowm : CMP #8 : BEQ nextcell
+    INC scr : JMP rowdone
+.nextcell                       \ down a character row: 640 on, 7 back
+    LDA #0 : STA rowm
+    LDA scr : CLC : ADC #LO(633) : STA scr
+    LDA scr+1 : ADC #HI(633) : STA scr+1
+.rowdone
+    DEX : BNE row
+    LDA base : CLC : ADC #8 : STA base
+    BCC nc : INC base+1
+.nc DEC ccount : BNE column
+    RTS
+}
+
+\ render: rub out the slots that changed, redraw changed cells, draw
+.render
+{
+    LDX #NSLOTS-1
+.p1
+    LDA sf,X : CMP #NOSPR : BEQ n1
+    CMP wf,X : BNE erase
+    LDA sx,X : CMP wx,X : BNE erase
+    LDA sy,X : CMP wy,X : BEQ n1
+.erase
+    JSR eraseslot
+.n1 DEX : BPL p1
+    JSR dotiles
+    LDX #NSLOTS-1
+.p2
+    LDA sf,X : CMP #NOSPR : BNE n2
+    LDA wf,X : CMP #NOSPR : BEQ n2
+    STA sf,X
+    LDA wx,X : STA sx,X : STA px
+    LDA wy,X : STA sy,X : STA py
+    STX t8 : LDA sf,X : JSR plotf : LDX t8
+.n2 DEX : BPL p2
+    RTS
+}
+
+.eraseslot              \ X = slot; keeps X
+    STX t8
+    LDA sx,X : STA px : LDA sy,X : STA py
+    LDA sf,X : JSR plotf
+    LDX t8 : LDA #NOSPR : STA sf,X
+    RTS
+
+.dotiles
+{
+.loop
+    LDX pendn : BNE more
+    RTS
+.more
+    DEX : STX pendn
+    LDA pendc,X : STA t9 : LDA pendr,X : STA t10
+    LDX #NSLOTS-1
+.s  LDA sf,X : CMP #NOSPR : BEQ ns
+    LDA sx,X : LSR A : CMP t9 : BEQ x1 : BCS ns
+.x1 LDA sx,X : CLC : ADC #3 : LSR A : CMP t9 : BCC ns
+    LDA sy,X : LSR A : LSR A : LSR A : CMP t10 : BEQ y1 : BCS ns
+.y1 LDA sy,X : CLC : ADC #15 : LSR A : LSR A : LSR A : CMP t10 : BCC ns
+    JSR eraseslot
+.ns DEX : BPL s
+    LDX t9 : LDY t10 : JSR drawcell
+    JMP loop
+}
+
+.setwanted
+{
+    LDA mx : STA wx : LDA my : STA wy
+    LDA manim : LSR A : AND #1 : STA t0
+    LDA mdir : CMP #D_DOWN : BCS updown
+    ASL A : ORA t0 : STA wf
+    JMP things
+.updown
+    LDA #4 : ORA t0 : STA wf
+.things
+    LDX #NTHINGS-1
+.tl
+    LDA tx,X : STA wx+SLOT_THING,X
+    LDA ty,X : STA wy+SLOT_THING,X
+    LDY tt,X : LDA thingframe,Y
+    CMP #F_BANG : BNE tset
+    LDA #5 : CMP ttim,X : LDA #F_BANG : ADC #0     \ small first, then big
+    CPY #T_REFORM : BNE tset
+    EOR #F_BANG EOR (F_BANG+1)                      \ the other way round
+.tset
+    STA wf+SLOT_THING,X
+    DEX : BPL tl
+    LDX #NMON-1
+.ml
+    LDA nx,X : STA wx+SLOT_MON,X
+    LDA ny,X : STA wy+SLOT_MON,X
+    LDA nst,X : BEQ mnone : CMP #2 : BEQ mdying
+    LDA nty,X : ASL A : STA t0
+    LDA nan,X : LSR A : AND #1 : ORA t0 : CLC : ADC #F_MON
+    JMP mset
+.mdying
+    LDA #5 : CMP ntim,X : LDA #F_BANG : ADC #0
+    JMP mset
+.mnone
+    LDA #NOSPR
+.mset
+    STA wf+SLOT_MON,X
+    DEX : BPL ml
+    \ the ball
+    LDA ballx : STA wx+SLOT_BALL : LDA bally : STA wy+SLOT_BALL
+    LDA #NOSPR : LDX ballon : BEQ nob : LDA #F_BALL
+.nob STA wf+SLOT_BALL
+    \ the UXB: flashes in its last 3 seconds, then explodes
+    LDA uxbx : STA wx+SLOT_UXB : LDA uxby : STA wy+SLOT_UXB
+    LDA uxbon : BEQ nou : CMP #2 : BEQ ubang
+    LDA uxbsecs : CMP #4 : BCS lit
+    LDA frame : AND #4 : BNE nou
+.lit LDA #F_UXB : JMP setu
+.ubang
+    LDA #5 : CMP uxbtim : LDA #F_BANG : ADC #0 : JMP setu
+.nou LDA #NOSPR
+.setu STA wf+SLOT_UXB
+    RTS
+}
+.thingframe EQUB NOSPR, F_APPLE, F_GOLD, F_BOX, F_BANG, F_BANG, NOSPR, F_BANG, F_GHOST, NOSPR
+
+.hideall
+{
+    LDX #NSLOTS-1
+.l  LDA #NOSPR : STA sf,X : STA wf,X
+    DEX : BPL l
+    RTS
+}
+
+\ ===========================================================================
+\  Text: 4-pixel letters in the Chuckie Egg style
+\  prtext: XY -> blocks of  column, row, ink, paper, "text", 0  ending &FF
+\ ===========================================================================
+.prtext
+{
+    STX tp : STY tp+1
+.block
+    LDY #0 : LDA (tp),Y : CMP #&FF : BEQ done
+    STA tcol : INY
+    LDA (tp),Y : STA trow : INY
+    LDA (tp),Y : STA tfg : INY
+    LDA (tp),Y : STA tbg : INY
+    JSR mkpair
+.ch LDA (tp),Y : BEQ endblock
+    INY : STY t7
+    JSR putchar
+    LDY t7 : JMP ch
+.endblock
+    INY : TYA : CLC : ADC tp : STA tp : BCC block : INC tp+1
+    JMP block
+.done
+    RTS
+}
+
+.mkpair
+    LDX tfg : LDA lmask,X : STA t4 : LDA rmask,X : STA t5
+    LDX tbg : LDA lmask,X : STA t6 : LDA rmask,X : STA t3
+    LDA t6 : ORA t3 : STA pairtab
+    LDA t6 : ORA t5 : STA pairtab+1
+    LDA t4 : ORA t3 : STA pairtab+2
+    LDA t4 : ORA t5 : STA pairtab+3
+    RTS
+
+.putchar
+{
+    SEC : SBC #32 : TAX : LDA fontmap,X
+    ASL A : ASL A : TAX
+    LDA font,X : STA gbuf : LDA font+1,X : STA gbuf+1
+    LDA font+2,X : STA gbuf+2 : LDA font+3,X : STA gbuf+3
+    JSR celladdr
+    LDX #0 : LDY #0
+.lp LDA gbuf,X : LSR A : LSR A : LSR A : LSR A : JSR putrow
+    LDA gbuf,X : AND #15 : JSR putrow
+    INX : CPX #4 : BNE lp
+    INC tcol
+    RTS
+.putrow
+    STA t2 : STX t3
+    LSR A : LSR A : TAX : LDA pairtab,X : STA (scr),Y
+    TYA : CLC : ADC #8 : TAY
+    LDA t2 : AND #3 : TAX : LDA pairtab,X : STA (scr),Y
+    TYA : SEC : SBC #7 : TAY
+    LDX t3
+    RTS
+}
+
+\ putbig: A = ASCII, drawn 2 cells wide and 3 tall in colour tfg
+.putbig
+{
+    SEC : SBC #32 : TAX : LDA fontmap,X : ASL A : ASL A : TAX
+    LDY #0
+.cp LDA font,X : STA gbuf,Y : INX : INY : CPY #4 : BNE cp
+    LDX tfg : LDA lmask,X : ORA rmask,X : STA t6
+    LDA trow : ASL A : ASL A : ASL A : STA t4
+    LDA #0 : STA t5
+.rowl
+    LDA t5 : LSR A : TAX : LDA gbuf,X
+    PHA : LDA t5 : AND #1 : BNE odd
+    PLA : LSR A : LSR A : LSR A : LSR A : JMP got
+.odd PLA : AND #15
+.got STA t7
+    LDA #3 : STA t3
+.rep
+    LDA tcol : ASL A : STA t1
+    LDA #8 : STA t2
+.colj
+    LDA t1 : STA bx : LDA t4 : STA by : JSR byteaddr
+    LDA t7 : AND t2 : BEQ off
+    LDA t6
+.off
+    LDY #0 : STA (scr),Y
+    INC t1 : LSR t2 : BNE colj
+    INC t4 : DEC t3 : BNE rep
+    INC t5 : LDA t5 : CMP #8 : BNE rowl
+    INC tcol : INC tcol
+    RTS
+}
+
+.prbcd
+    PHA : LSR A : LSR A : LSR A : LSR A : CLC : ADC #'0' : JSR putchar
+    PLA : AND #15 : CLC : ADC #'0' : JMP putchar
+
+.setcolour              \ A = ink, X = paper
+    STA tfg : STX tbg : JMP mkpair
+
+\ ===========================================================================
+\  Status area (rows 0-2)
+\ ===========================================================================
+.drawstatus
+    LDX #LO(statustext) : LDY #HI(statustext) : JSR prtext
+    JSR printscore : JSR printbonus : JSR printtime
+    JSR printlives : JSR printtally : JSR printball
+.printlevel
+    LDA #0 : LDX #5 : JSR setcolour
+    LDA #37 : STA tcol : LDA #2 : STA trow
+    LDA level : JMP prbcd
+
+.printscore
+    LDA #0 : LDX #5 : JSR setcolour
+    LDA #7 : STA tcol : LDA #0 : STA trow
+    LDA score : JSR prbcd : LDA score+1 : JSR prbcd : LDA score+2 : JSR prbcd
+    LDA #33 : STA tcol
+    LDA high : JSR prbcd : LDA high+1 : JSR prbcd : LDA high+2 : JMP prbcd
+
+.printbonus
+    LDA #0 : LDX #5 : JSR setcolour
+    LDA #7 : STA tcol : LDA #2 : STA trow
+    LDA bonus : JSR prbcd : LDA bonus+1 : JMP prbcd
+
+.printtime
+    LDA #0 : LDX #5 : JSR setcolour
+    LDA #20 : STA tcol : LDA #2 : STA trow
+    LDA time : AND #15 : CLC : ADC #'0' : JSR putchar
+    LDA time+1 : JMP prbcd
+
+.printlives
+{
+    LDX #0
+.l  STX t9
+    LDA #LO(tiles) : STA tp : LDA #HI(tiles) : STA tp+1
+    INX : CPX lives : BCS blank
+    LDA #LO(minis) : STA tp : LDA #HI(minis) : STA tp+1
+.blank
+    LDX t9 : LDY #1 : JSR blitcell
+    LDX t9 : INX : CPX #10 : BNE l
+    RTS
+}
+
+\ the tally: an apple in the status line for each one removed
+.printtally
+{
+    LDA #0 : STA t9
+.l  LDA #LO(tiles) : STA tp : LDA #HI(tiles) : STA tp+1
+    LDA t9 : CMP tally : BCS b1
+    LDA #LO(minis+16) : STA tp : LDA #HI(minis+16) : STA tp+1
+.b1 LDA t9 : ASL A : CLC : ADC #14 : TAX : LDY #0 : JSR blitcell
+    LDA t9 : CMP tally : BCS b2
+    LDA #LO(minis+32) : STA tp : LDA #HI(minis+32) : STA tp+1
+.b2 INX : LDY #0 : JSR blitcell
+    INC t9 : LDA t9 : CMP #6 : BNE l
+    RTS
+}
+
+\ a ball icon for each ball you've got, top right
+.printball
+{
+    LDX #0
+.l  STX t9
+    LDA #LO(tiles) : STA tp : LDA #HI(tiles) : STA tp+1
+    CPX balls : BCS blank
+    LDA #LO(minis+48) : STA tp : LDA #HI(minis+48) : STA tp+1
+.blank
+    TXA : CLC : ADC #37 : TAX : LDY #1 : JSR blitcell
+    LDX t9 : INX : CPX #MAXBALLS : BNE l
+    RTS
+}
+
+\ ===========================================================================
+\  Keyboard
+\ ===========================================================================
+.readkeys
+{
+    LDA keys : STA oldkeys
+    LDA #0 : STA keys
+    LDA #5 : STA t0
+.loop
+    LDY t0 : LDX keytab,Y
+    LDY #&FF : LDA #129 : JSR OSBYTE
+    CPX #&FF
+    ROL keys
+    DEC t0 : BPL loop
+    LDA #15 : LDX #1 : JMP OSBYTE
+}
+\ read from the end backwards; each ROL pushes the earlier ones up a bit
+.keytab
+    EQUB 256-67         \ X       right  bit 0
+    EQUB 256-98         \ Z       left   bit 1
+    EQUB 256-105        \ /       down   bit 2
+    EQUB 256-73         \ :       up     bit 3
+    EQUB 256-99         \ SPACE   kick   bit 4
+    EQUB 256-74         \ RETURN  ball   bit 5
+
+.waitspace
+{
+.up LDX #256-99 : LDY #&FF : LDA #129 : JSR OSBYTE : JSR rnd
+    CPX #&FF : BEQ up
+.dn LDX #256-99 : LDY #&FF : LDA #129 : JSR OSBYTE : JSR rnd
+    CPX #&FF : BNE dn
+.rl LDX #256-99 : LDY #&FF : LDA #129 : JSR OSBYTE
+    CPX #&FF : BEQ rl
+    LDA #15 : LDX #1 : JMP OSBYTE
+}
+
+.pause                  \ A = 50ths of a second
+{
+    STA t0
+.l  LDA #19 : JSR OSBYTE : DEC t0 : BNE l
+    RTS
+}
+
+\ ===========================================================================
+\  Rectangles: everything is 4 bytes x 16 lines
+\ ===========================================================================
+.rectman
+{
+    LDA mx : SEC : SBC rx : BCS p1 : EOR #&FF : ADC #1
+.p1 CMP #4 : BCS no
+    LDA my : SEC : SBC ry : BCS p2 : EOR #&FF : ADC #1
+.p2 CMP #16 : BCS no
+    SEC : RTS
+.no CLC : RTS
+}
+
+.rectobj                \ carry set, X = solid thing at rx, ry (not marked)
+{
+    LDX #NTHINGS-1
+.l  LDA tmark,X : BNE n
+    LDA tt,X : BEQ n : CMP #T_BANG : BCS n
+    LDA tx,X : SEC : SBC rx : BCS p1 : EOR #&FF : ADC #1
+.p1 CMP #4 : BCS n
+    LDA ty,X : SEC : SBC ry : BCS p2 : EOR #&FF : ADC #1
+.p2 CMP #16 : BCS n
+    SEC : RTS
+.n  DEX : BPL l
+    CLC : RTS
+}
+
+.rectmon                \ carry set, X = live monster at rx, ry
+{
+    LDX #NMON-1
+.l  LDA nst,X : CMP #1 : BNE n
+    LDA nx,X : SEC : SBC rx : BCS p1 : EOR #&FF : ADC #1
+.p1 CMP #4 : BCS n
+    LDA ny,X : SEC : SBC ry : BCS p2 : EOR #&FF : ADC #1
+.p2 CMP #16 : BCS n
+    SEC : RTS
+.n  DEX : BPL l
+    CLC : RTS
+}
+
+.dirstep                \ A = direction -> sdx, sdy (1 byte or 4 lines)
+    TAX : LDA dirdx,X : STA sdx : LDA dirdy,X : STA sdy
+    RTS
+.dirdx EQUB 1, &FF, 0, 0
+.dirdy EQUB 0, 0, 4, &FC
+.unitdx EQUB 1, &FF, 0, 0
+.unitdy EQUB 0, 0, 1, &FF
+
+INCLUDE "play.6502"
+
+\ ===========================================================================
+\  Sound: OSWORD 7 blocks, the same numbers as BASIC's SOUND
+\ ===========================================================================
+.sound
+{
+    TXA : CLC : ADC #LO(sounds) : TAX
+    LDA #HI(sounds) : ADC #0 : TAY
+    LDA #7 : JMP OSWORD
+}
+.sounds
+.snd_kick  EQUW &12 : EQUW &FFF4 : EQUW 120 : EQUW 1
+.snd_gate  EQUW &11 : EQUW &FFF1 : EQUW 200 : EQUW 4
+.snd_bang  EQUW &10 : EQUW &FFF1 : EQUW 6   : EQUW 4
+.snd_thud  EQUW &13 : EQUW &FFF8 : EQUW 20  : EQUW 1
+.snd_squash EQUW &12 : EQUW &FFF1 : EQUW 60 : EQUW 3
+.snd_cup   EQUW &11 : EQUW &FFF1 : EQUW 220 : EQUW 4
+.snd_open  EQUW &11 : EQUW &FFF1 : EQUW 160 : EQUW 12
+.snd_die   EQUW &11 : EQUW &FFF1 : EQUW 100 : EQUW 2
+.snd_count EQUW &13 : EQUW &FFF6 : EQUW 220 : EQUW 1
+.snd_super EQUW &11 : EQUW &FFF1 : EQUW 250 : EQUW 20
+.snd_step  EQUW &13 : EQUW &FFF9 : EQUW 150 : EQUW 1
+.snd_throw EQUW &12 : EQUW &FFF6 : EQUW 180 : EQUW 2
+.snd_gold  EQUW &11 : EQUW &FFF1 : EQUW 240 : EQUW 6
+.snd_life  EQUW &11 : EQUW &FFF1 : EQUW 228 : EQUW 10
+.snd_tick  EQUW &13 : EQUW &FFF6 : EQUW 200 : EQUW 1
+.snd_defuse EQUW &11 : EQUW &FFF1 : EQUW 180 : EQUW 6
+
+.rnd
+{
+    LSR seed+1 : ROR seed
+    BCC nofb
+    LDA seed+1 : EOR #&B4 : STA seed+1
+.nofb
+    LDA seed
+    RTS
+}
+
+\ ===========================================================================
+\  Tables and text
+\ ===========================================================================
+.scrrowlo FOR r,0,NROWS-1 : EQUB LO(SCREEN + r*640) : NEXT
+.scrrowhi FOR r,0,NROWS-1 : EQUB HI(SCREEN + r*640) : NEXT
+\ map rows: the status rows point at a row of zeros
+.maprowlo FOR r,0,NROWS-1 : IF r < TOPROW : EQUB LO(zerorow) : ELSE : EQUB LO(MAP + (r-TOPROW)*40) : ENDIF : NEXT
+.maprowhi FOR r,0,NROWS-1 : IF r < TOPROW : EQUB HI(zerorow) : ELSE : EQUB HI(MAP + (r-TOPROW)*40) : ENDIF : NEXT
+.zerorow FOR i,1,40 : EQUB 0 : NEXT
+.sprlo FOR f,0,19 : EQUB LO(sprites + f*64) : NEXT
+.sprhi FOR f,0,19 : EQUB HI(sprites + f*64) : NEXT
+
+\ text blocks: column, row, ink, paper, text, 0 ... &FF
+\ colours: 0 black 1 red 2 green 3 yellow 4 blue 5 magenta 6 cyan 7 white
+.statustext
+    EQUB 0,0,0,5 : EQUS " SCORE        ",0
+    EQUB 27,0,0,5 : EQUS " HIGH        ",0
+    EQUB 0,2,0,5 : EQUS " BONUS      ",0
+    EQUB 14,2,0,5 : EQUS " TIME     ",0
+    EQUB 30,2,0,5 : EQUS " LEVEL    ",0
+    EQUB &FF
+.msg_ready EQUB 14,1,3,0 : EQUS " GET READY ",0,&FF
+.msg_blank EQUB 14,1,0,0 : EQUS "           ",0,&FF
+.msg_over  EQUB 14,1,1,0 : EQUS " GAME OVER ",0,&FF
+.msg_done  EQUB 14,1,2,0 : EQUS " WELL DONE ",0,&FF
+.msg_super EQUB 14,1,6,0 : EQUS "SUPER BONUS",0,&FF
+.msg_uxb   EQUB 15,1,3,1 : EQUS " UXB  ",0,&FF
+.titletext
+    EQUB 0,11,2,0 : EQUS "DESIGN: NIGEL ALDERTON 1983 (CC BY 2.5)",0
+    EQUB 4,12,7,0 : EQUS "BBC VERSION BY D8FYDD-BEEP 2026",0
+    EQUB 5,14,5,0 : EQUS "Z LEFT  X RIGHT  : UP  / DOWN",0
+    EQUB 4,15,5,0 : EQUS "SPACE KICK    RETURN THROW BALL",0
+    EQUB 4,17,6,0 : EQUS "WALK UNDER AN APPLE TO CARRY IT",0
+    EQUB 2,18,6,0 : EQUS "GET ALL SIX APPLES OUT THROUGH THE",0
+    EQUB 3,19,6,0 : EQUS "ARROW CHUTES AND THE EXIT OPENS",0
+    EQUB 2,20,3,0 : EQUS "HOLD SPACE, WALK AWAY TO PULL A",0
+    EQUB 1,21,3,0 : EQUS "CRATE. CARRY ONE OUT OF THE TOP FOR",0
+    EQUB 1,22,3,0 : EQUS "A BALL. BALL A CRATE FOR GOLD!",0
+    EQUB 6,23,1,0 : EQUS "GRAB A UXB BEFORE IT BLOWS!",0
+    EQUB 11,25,2,0 : EQUS "HIGH SCORE",0
+    EQUB 10,27,3,0 : EQUS "PRESS",0
+    EQUB 16,27,6,0 : EQUS "SPACE",0
+    EQUB 22,27,3,0 : EQUS "TO PLAY",0
+    EQUB &FF
+
+INCLUDE "data.6502"
+.codeend
+
+\ ---------------------------------------------------------------------------
+\ Variables that don't need to be in zero page (not saved in the file)
+\ ---------------------------------------------------------------------------
+.tmark SKIP NTHINGS : .chain SKIP NTHINGS
+.wx SKIP NSLOTS : .wy SKIP NSLOTS : .wf SKIP NSLOTS
+.sx SKIP NSLOTS : .sy SKIP NSLOTS : .sf SKIP NSLOTS
+.varend
+
+\ ...and some in odd corners of low memory that nothing else is using
+ORG MAP + 1000                          \ the 24 bytes after the map
+.txf SKIP NTHINGS : .tyf SKIP NTHINGS : .ttim SKIP NTHINGS
+ASSERT P% <= &0D00
+ORG &0880                               \ the printer buffer (never used here)
+.pendc SKIP MAXPEND : .pendr SKIP MAXPEND
+ORG &08C0                               \ the ENVELOPE store (never used here)
+.nx SKIP NMON : .ny SKIP NMON : .nd SKIP NMON : .nty SKIP NMON
+.nst SKIP NMON : .ntim SKIP NMON : .nacc SKIP NMON : .nan SKIP NMON
+.order SKIP 4
+.levspeed SKIP 1 : .maxmon SKIP 1 : .montotal SKIP 1 : .spawned SKIP 1 : .spawntim SKIP 1
+.cupc SKIP 1 : .cupr SKIP 1 : .entr SKIP 1 : .exitr SKIP 1
+.ballon SKIP 1 : .ballx SKIP 1 : .bally SKIP 1 : .ballvx SKIP 1 : .ballvy SKIP 1
+.balltim SKIP 1 : .balls SKIP 1 : .pull SKIP 1
+.uxbon SKIP 1 : .uxbx SKIP 1 : .uxby SKIP 1 : .uxbsecs SKIP 1 : .uxbtim SKIP 1
+.uxbwait SKIP 1 : .uxbsub SKIP 1 : .boom SKIP 1
+ASSERT P% <= &0900
+PRINT "Program", ~start, "-", ~codeend, "(", codeend-start, "bytes ), variables to", ~varend
+ASSERT varend <= SCREEN
+
+\ ---------------------------------------------------------------------------
+\ The loader. The program's bytes are put in the file starting at &1900,
+\ followed by this little routine, which runs first: it copies them down
+\ to &0E00 and jumps in.
+\ ---------------------------------------------------------------------------
+SIZE = codeend - RUNADDR
+COPYBLOCK RUNADDR, codeend, LOADADDR
+ORG LOADADDR + SIZE
+.mover
+{
+    LDA #LO(LOADADDR) : STA &70 : LDA #HI(LOADADDR) : STA &71
+    LDA #LO(RUNADDR) : STA &72 : LDA #HI(RUNADDR) : STA &73
+    LDY #0
+    LDX #(SIZE + 255) DIV 256
+.loop
+    LDA (&70),Y : STA (&72),Y
+    INY : BNE loop
+    INC &71 : INC &73
+    DEX : BNE loop
+    JMP start
+}
+.moverend
+PRINT "EXEC", ~mover
+SAVE LOADADDR, moverend, mover

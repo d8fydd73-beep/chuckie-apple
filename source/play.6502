@@ -1,0 +1,1201 @@
+\ ===========================================================================
+\  CHUCKIE APPLE v2 - the game itself (included from apple.6502)
+\  BBC version by D8fydd-Beep, 2026
+\ ===========================================================================
+
+\ ===========================================================================
+\  Level set-up
+\ ===========================================================================
+.setuplevel
+{
+    \ which layout: levels 1-4 are the four layouts, then round again
+    LDA levbin : SEC : SBC #1
+.m4 CMP #NLEVELS : BCC got : SBC #NLEVELS : JMP m4
+.got
+    STA lay
+    JSR clearscreen
+    JSR hideall
+    JSR drawmap
+    LDX lay
+    LDA levcupc,X : STA cupc : LDA levcupr,X : STA cupr
+    LDA levent,X : STA entr : LDA levexit,X : STA exitr
+    LDA lay : ASL A : ASL A : ASL A : TAY       \ 8 things per layout
+    LDX #0
+.t  LDA thingx,Y : STA tx,X
+    LDA thingy,Y : STA ty,X
+    LDA thingt,Y : STA tt,X
+    LDA #0 : STA tvx,X : STA tvy,X : STA txf,X : STA tyf,X
+    STA tmark,X : STA ttim,X
+    INY : INX : CPX #NTHINGS : BNE t
+    LDX #NMON-1 : LDA #0
+.m  STA nst,X : DEX : BPL m
+    LDA #0 : STA tally : STA train : STA superflag : STA exitopen
+    STA levdone : STA spawned : STA pendn : STA btick : STA keys
+    STA ballon : STA pull : STA boom
+    JSR resetuxb
+    LDA #150 : STA spawntim
+    \ monsters: two at a time on level 1, then three; more of them and a
+    \ little faster as the levels go up
+    LDA #2 : LDX levbin : CPX #2 : BCC mm : LDA #3
+.mm STA maxmon
+    LDA levbin : CLC : ADC #3 : CMP #10 : BCC mt : LDA #9
+.mt STA montotal
+    LDA levbin : CMP #9 : BCS capsp
+    SEC : SBC #1 : STA t0 : ASL A : ADC t0 : ASL A : JMP ls    \ x6
+.capsp LDA #48
+.ls STA levspeed
+    \ the bonus: 1000 x level, up to 9000
+    LDA levbin : CMP #9 : BCC b : LDA #9
+.b  ASL A : ASL A : ASL A : ASL A : STA bonus
+    LDA #0 : STA bonus+1
+    JSR resettime
+    JSR resetman
+    JSR drawstatus
+    JMP setwanted
+}
+
+.resettime
+    LDA #&09 : STA time : LDA #&99 : STA time+1 : LDA #0 : STA ttick
+    RTS
+
+\ put the man at the entrance, and get rid of anything sitting there
+.resetman
+{
+    LDA #2 : STA mx
+    LDA entr : ASL A : ASL A : ASL A : STA my
+    LDA #D_RIGHT : STA mdir : STA mlasth
+    LDA #D_DOWN : STA mlastv
+    LDA #0 : STA macc : STA manim : STA mwasup
+    LDA mx : STA rx : LDA my : STA ry
+.smash
+    JSR rectobj : BCC clear
+    LDA #0 : STA tvy,X
+    LDA tt,X : CMP #T_APPLE : BNE move
+    LDA #0 : STA tvx,X
+    LDA #T_KBANG : STA tt,X             \ an apple comes back later
+    LDA #10 : STA ttim,X
+    JMP smash
+.move                                   \ a crate or gold turns up elsewhere
+    STA tvx,X                           \ (remember which)
+    LDA #T_CRWAIT : STA tt,X : LDA #CRATEBACK : STA ttim,X
+    JMP smash
+.clear
+    RTS
+}
+
+.cleartmark
+{
+    LDX #NTHINGS-1 : LDA #0
+.l  STA tmark,X : DEX : BPL l
+    RTS
+}
+
+\ ===========================================================================
+\  The man
+\ ===========================================================================
+.updman
+{
+    LDA keys : AND #K_KICK : BEQ nokick       \ kick on the press, not
+    LDA oldkeys : AND #K_KICK : BNE nokick    \ while it's held down
+    JSR kick
+.nokick
+    LDA keys : AND #K_BALL : BEQ noball
+    LDA oldkeys : AND #K_BALL : BNE noball
+    JSR throw
+.noball
+    LDA keys : AND #K_UP : BEQ n1 : LDA #D_UP : JMP got
+.n1 LDA keys : AND #K_DOWN : BEQ n2 : LDA #D_DOWN : JMP got
+.n2 LDA keys : AND #K_LEFT : BEQ n3 : LDA #D_LEFT : JMP got
+.n3 LDA keys : AND #K_RIGHT : BEQ none : LDA #D_RIGHT : JMP got
+.none
+    LDA #0 : STA train          \ stopped pushing: the line is broken
+    RTS
+.got
+    \ like Mr Do!, he turns on the grid: up and down when he's lined up
+    \ with a column, left and right when lined up with a row
+    STA t0
+    CMP #D_DOWN : BCC horiz
+    LDA mx : AND #1 : BEQ ok
+    LDA mlasth : STA t0 : JMP ok
+.horiz
+    LDA my : AND #7 : BEQ ok
+    LDA mlastv : STA t0
+.ok LDA t0 : STA mdir
+    JSR cleartmark
+    JSR manmove
+    JMP cleartmark
+}
+
+.manmove
+{
+    LDA mdir : JSR dirstep
+    LDA mx : CLC : ADC sdx : STA nnx : STA rx
+    LDA my : CLC : ADC sdy : STA nny : STA ry
+    JSR rectmap : STA t9
+    AND #P_BLOCKMAN : BNE blocked
+    LDA #MSPEED : STA mspeed
+    LDA t9 : AND #P_DIG : BEQ nodig
+    LDA #DIGSPEED : STA mspeed
+.nodig
+    LDA #0 : STA nchain
+    LDA mdir : CMP #D_DOWN : BCS vert
+    JSR pushchain : BCC blocked
+    JMP go
+.vert
+    CMP #D_UP : BEQ up
+    LDA nnx : STA rx : LDA nny : STA ry
+    JSR rectobj : BCS blocked
+    JMP go
+.up
+    JSR liftlist : BCC blocked
+.go
+    JSR findpull
+    LDX nchain : LDA pull : BMI np : INX
+.np CPX #0 : BEQ sp           \ speed / (things pushed or pulled + 1)
+    INX : STX t1
+    LDA #0 : STA t2
+    LDA mspeed
+.dv SEC : SBC t1 : BCC dd : INC t2 : JMP dv
+.dd LDA t2 : STA mspeed
+.sp LDA macc : CLC : ADC mspeed : STA macc
+    BCS step
+    RTS
+.blocked
+    LDA #0 : STA train
+    RTS
+.step
+    JSR movechain
+    LDA mdir : CMP #D_DOWN : BCS nocarry
+    JSR carryalong
+.nocarry
+    LDA mdir : CMP #D_DOWN : BNE notdown
+    JSR toss
+.notdown
+    LDA nnx : STA mx : LDA nny : STA my
+    LDX pull : BMI nopull                \ the crate he's pulling follows
+    LDA tx,X : CLC : ADC sdx : STA tx,X
+.nopull
+    INC manim
+    LDA manim : AND #1 : BNE quiet       \ pitter-patter
+    LDX #snd_step-sounds : JSR sound
+.quiet
+    LDA mdir : CMP #D_DOWN : BCS wasv
+    STA mlasth : JMP dug
+.wasv
+    STA mlastv
+    LDX #0 : CMP #D_UP : BNE setup : INX
+.setup STX mwasup
+.dug
+    LDA mx : STA rx : LDA my : STA ry : JSR digman
+    LDA mx : STA rx : LDA my : STA ry : JSR rectmap
+    AND #P_EXIT : BEQ r
+    LDA #1 : STA levdone
+.r  RTS
+}
+
+\ pushchain: going left or right, find everything he'd push
+.pushchain
+{
+    LDA #0 : STA t8
+    LDA nnx : STA rx : LDA nny : STA ry
+.find
+    JSR rectobj : BCC expand
+    LDA #1 : STA tmark,X
+    TXA : LDX nchain : STA chain,X : INC nchain
+    JMP find
+.expand
+    LDX t8 : CPX nchain : BCS ok
+    LDY chain,X : STY t7 : INC t8
+    LDA tx,Y : CLC : ADC sdx : STA rx
+    LDA ty,Y : STA ry
+    JSR rectmap : STA t1
+    AND #P_HARD : BNE no
+    LDA t1 : AND #P_GATE : BEQ find
+    JMP expand                  \ going out of a chute: nothing beyond matters
+.ok SEC : RTS
+.no CLC : RTS
+}
+
+\ liftlist: going up, anything on his head must be able to go up too
+.liftlist
+{
+    LDA nnx : STA rx : LDA nny : STA ry
+.find
+    JSR rectobj : BCC ok
+    LDA #1 : STA tmark,X
+    TXA : LDY nchain : STA chain,Y : INC nchain
+    STX t7
+    LDA tx,X : STA rx : LDA ty,X : SEC : SBC #4 : STA ry
+    JSR rectmap : STA t1
+    AND #P_BLOCKOBJ : BNE no
+    LDA t1 : AND #P_GATE : BEQ nogate
+    LDA t1 : AND #P_TOP : BNE back      \ anything can go out of the top
+    LDX t7 : LDA tt,X : CMP #T_BOX : BCS no
+    JMP back
+.nogate
+    JSR rectobj : BCS no
+.back
+    LDA nnx : STA rx : LDA nny : STA ry
+    JMP find
+.ok SEC : RTS
+.no CLC : RTS
+}
+
+.movechain
+{
+    LDA nchain : BNE some
+    LDA #0 : STA train
+    RTS
+.some
+    LDX #0
+.l  STX t8
+    LDY chain,X : STY ti
+    LDA tx,Y : CLC : ADC sdx : STA rx
+    LDA ty,Y : CLC : ADC sdy : STA ry
+    JSR rectmap : AND #P_GATE : BEQ mv
+    LDA sdy : BEQ pushed            \ pushed sideways counts for the super
+    LDA #0 : STA train : JMP gt     \ bonus; lifted doesn't
+.pushed
+    INC train
+.gt LDX ti : JSR throughgate
+    JMP nx
+.mv LDX ti
+    LDA rx : STA tx,X : LDA ry : STA ty,X
+    LDA #0 : STA tvx,X : STA txf,X
+    LDA sdy : BEQ side
+    LDA #0 : STA tvy,X : STA tyf,X
+.side
+    JSR rectmon : BCC nok               \ pushed or lifted into a monster:
+    JSR killmon                         \ squashed
+.nok
+    JSR dig
+.nx LDX t8 : INX : CPX nchain : BNE l
+    RTS
+}
+
+.carryalong
+{
+    LDA keys : AND #K_KICK : BEQ go     \ SPACE held: leave it behind
+    RTS
+.go LDX #NTHINGS-1
+.l  STX t7
+    JSR onhead : BCC n
+    LDA tx,X : CLC : ADC sdx : STA rx : LDA ty,X : STA ry
+    JSR rectmap : AND #P_BLOCKOBJ+P_GATE : BNE n
+    LDX t7 : LDA #1 : STA tmark,X
+    JSR rectobj
+    LDX t7 : LDA #0 : STA tmark,X
+    BCS n
+    LDA rx : STA tx,X
+.n  LDX t7 : DEX : BPL l
+    RTS
+}
+
+.toss
+{
+    LDA mwasup : BEQ r
+    LDX #NTHINGS-1
+.l  STX t7
+    JSR onhead : BCC n
+    LDA #256-TOSSVY : STA tvy,X
+.n  LDX t7 : DEX : BPL l
+.r  RTS
+}
+
+.findpull
+\ pulling: SPACE held, walking left or right, and a crate right behind him
+\ on the same level -> pull = that crate (or &FF)
+{
+    LDA #&FF : STA pull
+    LDA keys : AND #K_KICK : BEQ r
+    LDA sdy : BNE r
+    LDA sdx : ASL A : ASL A                  \ 4 or -4: one sprite's width
+    STA t0 : LDA mx : SEC : SBC t0 : STA t0  \ where a crate behind would be
+    LDX #NTHINGS-1
+.l  LDA tt,X : CMP #T_BOX : BNE n
+    LDA tmark,X : BNE n
+    LDA tx,X : CMP t0 : BNE n
+    LDA ty,X : CMP my : BNE n
+    LDA tvy,X : BNE n
+    STX pull
+    RTS
+.n  DEX : BPL l
+.r  RTS
+}
+
+.onhead
+{
+    LDA tt,X : BEQ no : CMP #T_BANG : BCS no
+    LDA tmark,X : BNE no
+    LDA ty,X : CLC : ADC #16 : CMP my : BNE no
+    LDA tx,X : SEC : SBC mx : BCS p : EOR #&FF : ADC #1
+.p  CMP #4 : BCS no
+    SEC : RTS
+.no CLC : RTS
+}
+
+\ ===========================================================================
+\  Kicking
+\ ===========================================================================
+.kick
+{
+    LDX #NTHINGS-1                      \ something on his head? pop it up
+.h  STX t7 : JSR onhead : BCC nh
+    LDA #256-POPVY : STA tvy,X
+    LDX #snd_kick-sounds : JMP sound
+.nh LDX t7 : DEX : BPL h
+    LDX mdir
+    LDA unitdx,X : STA sdx : LDA unitdy,X : STA sdy
+    LDA mx : CLC : ADC sdx : STA rx
+    LDA my : CLC : ADC sdy : STA ry
+    JSR cleartmark
+    JSR rectobj : BCC whiff
+    LDA tt,X : CMP #T_BOX : BNE notcrate
+    RTS                                 \ a crate: SPACE grabs it, no kick
+.notcrate
+    STX tj
+.follow
+    LDA #1 : STA tmark,X
+    STX ti
+    LDA tx,X : CLC : ADC sdx : STA rx
+    LDA ty,X : CLC : ADC sdy : STA ry
+    JSR rectobj : BCS follow
+    JSR cleartmark
+    LDX ti : JSR canmove : BCC stuck
+    LDA mdir : CMP #D_DOWN : BCS upd
+    LDA #KICKVX : LDY sdx : BPL kx : LDA #256-KICKVX
+.kx STA tvx,X : JMP kicked
+.upd
+    LDA #KICKVY : LDY sdy : BPL ky : LDA #256-KICKVY
+.ky STA tvy,X
+.kicked
+    LDX #snd_kick-sounds : JMP sound
+.stuck
+    LDX tj : LDA tt,X
+    CMP #T_APPLE : BEQ apple
+    CMP #T_GOLD : BNE whiff
+    LDA #T_BANG : JMP boom          \ gold kicked into a wall is lost
+.apple
+    LDA #T_KBANG                    \ an apple comes back
+.boom
+    STA tt,X : LDA #10 : STA ttim,X
+    LDA #0 : STA tvx,X : STA tvy,X
+    LDX #snd_bang-sounds : JMP sound
+.whiff
+    LDX #snd_thud-sounds : JMP sound
+}
+
+.canmove
+{
+    STX t4
+    LDA tx,X : CLC : ADC sdx : STA rx
+    LDA ty,X : CLC : ADC sdy : STA ry
+    JSR rectmap : STA t1
+    AND #P_BLOCKOBJ : BNE no
+    LDA t1 : AND #P_GATE : BEQ g
+    LDX t4 : LDA tt,X : CMP #T_BOX : BCS no
+.g  JSR rectman : BCS no
+    LDX t4 : LDA #1 : STA tmark,X
+    JSR rectobj
+    LDX t4 : LDA #0 : STA tmark,X
+    BCS no
+    SEC : RTS
+.no LDX t4 : CLC : RTS
+}
+
+\ ===========================================================================
+\  The power ball (from Mr Do!): bounces round the tunnels, kills the first
+\  monster it meets, and turns a crate into a golden apple
+\ ===========================================================================
+.throw
+{
+    LDA ballon : BNE r
+    LDA balls : BEQ r
+    DEC balls
+    LDA #1 : STA ballon : LDA #BALLLIFE : STA balltim
+    LDA mx : STA ballx : LDA my : STA bally
+    LDX #1 : LDA mdir : CMP #D_LEFT : BNE h : LDX #&FF
+.h  STX ballvx
+    LDX #&FE : CMP #D_DOWN : BNE v : LDX #2
+.v  STX ballvy
+    LDX #snd_throw-sounds : JSR sound
+    JMP printball
+.r  RTS
+}
+
+.updball
+{
+    LDA ballon : BNE on
+    RTS
+.on DEC balltim : BNE alive
+    JMP finish
+.alive
+    \ sideways: the ball is the byte at ballx+1, lines bally+6 to +9
+    LDA ballx : CLC : ADC ballvx : STA t0
+    CLC : ADC #1 : LSR A : TAX
+    LDA bally : CLC : ADC #6 : LSR A : LSR A : LSR A : TAY
+    JSR solid : BNE xb
+    LDA bally : CLC : ADC #9 : LSR A : LSR A : LSR A : TAY
+    JSR solid : BNE xb
+    LDA t0 : STA ballx : JMP ydo
+.xb LDA ballvx : EOR #&FF : CLC : ADC #1 : STA ballvx
+.ydo
+    \ up and down: look at the leading edge
+    LDA ballvy : BMI goup
+    LDA bally : CLC : ADC #9 : JMP edge
+.goup
+    LDA bally : CLC : ADC #6
+.edge
+    CLC : ADC ballvy : LSR A : LSR A : LSR A : TAY
+    LDA ballx : CLC : ADC #1 : LSR A : TAX
+    JSR solid : BNE yb
+    LDA bally : CLC : ADC ballvy : STA bally : JMP hits
+.yb LDA ballvy : EOR #&FF : CLC : ADC #1 : STA ballvy
+.hits
+    LDA ballx : SEC : SBC #1 : STA rx
+    LDA bally : SEC : SBC #1 : STA ry
+    JSR rectmon : BCC nomon
+    JSR killmon
+    JMP finish
+.nomon
+    JSR rectobj : BCC r
+    LDA tt,X : CMP #T_BOX : BNE bounce
+    LDA #T_GOLD : STA tt,X              \ a crate: smash it, gold inside
+    LDA #&00 : LDX #&01 : JSR addscore
+    LDX #snd_gold-sounds : JSR sound
+    JMP finish
+.bounce                                 \ off an apple
+    LDA ballvx : EOR #&FF : CLC : ADC #1 : STA ballvx
+    LDA ballvy : EOR #&FF : CLC : ADC #1 : STA ballvy
+.r  RTS
+.finish
+    LDA #0 : STA ballon
+    RTS
+}
+
+.resetuxb               \ no UXB, and the next one in 15-30 seconds
+    LDA #0 : STA uxbon : STA uxbsub
+    JSR rnd : AND #15 : CLC : ADC #15 : STA uxbwait
+    RTS
+
+\ ===========================================================================
+\  UXB apples: one turns up now and then with a 10 second fuse. Walk into
+\  it to defuse it; leave it and it blows a hole in the stuff.
+\ ===========================================================================
+.upduxb
+{
+    LDA uxbon : CMP #2 : BNE notbang
+    DEC uxbtim : BNE r                  \ the explosion dies away
+    JMP resetuxb
+.notbang
+    CMP #1 : BNE seconds
+    LDA uxbx : STA rx : LDA uxby : STA ry
+    JSR rectman : BCC seconds
+    \ defused!
+    LDA #&00 : LDX #&10 : JSR addscore
+    LDX #snd_defuse-sounds : JSR sound
+    JSR resetuxb
+    JMP printuxb
+.seconds
+    INC uxbsub : LDA uxbsub : CMP #25 : BCC r
+    LDA #0 : STA uxbsub
+    LDA uxbon : BNE ticking
+    DEC uxbwait : BNE r
+    \ time for a new one
+    JSR findspot : BCS found
+    LDA #1 : STA uxbwait                \ nowhere free: try in a second
+.r  RTS
+.found
+    LDA rx : STA uxbx : LDA ry : STA uxby
+    LDA #1 : STA uxbon : LDA #10 : STA uxbsecs
+    JMP printuxb
+.ticking
+    DEC uxbsecs : BEQ explode
+    LDX #snd_tick-sounds : JSR sound
+    JMP printuxb
+.explode
+    LDA #2 : STA uxbon : LDA #12 : STA uxbtim
+    JSR printuxb
+    LDX #snd_bang-sounds : JSR sound
+    \ blow a crater: the stuff in a 4 x 4 cell square goes
+    LDA uxby : LSR A : LSR A : LSR A : SEC : SBC #1 : STA t11
+    LDA #4 : STA t9
+.br LDA uxbx : LSR A : SEC : SBC #1 : TAX
+    LDA #4 : STA t8
+.bc STX t10 : LDY t11 : JSR getcell : CMP #C_STUFF : BNE nb
+    LDA #C_EMPTY : JSR setcell
+.nb LDX t10 : INX : DEC t8 : BNE bc
+    INC t11 : DEC t9 : BNE br
+    \ anything close by is caught in it
+    LDX #NMON-1
+.ml LDA nst,X : CMP #1 : BNE mn
+    LDA nx,X : JSR nearx : BCS mn
+    LDA ny,X : JSR neary : BCS mn
+    STX t9 : JSR killmon : LDX t9
+.mn DEX : BPL ml
+    LDA mx : JSR nearx : BCS safe
+    LDA my : JSR neary : BCS safe
+    LDA #1 : STA boom
+.safe
+    RTS
+.nearx                                  \ carry clear if A is near uxbx
+    SEC : SBC uxbx : BCS nx1 : EOR #&FF : ADC #1
+.nx1 CMP #8 : RTS
+.neary
+    SEC : SBC uxby : BCS ny1 : EOR #&FF : ADC #1
+.ny1 CMP #24 : RTS
+}
+
+.printuxb               \ the countdown in the status line
+{
+    LDA uxbon : CMP #1 : BEQ show
+    LDX #LO(msg_blank) : LDY #HI(msg_blank) : JMP prtext
+.show
+    LDX #LO(msg_uxb) : LDY #HI(msg_uxb) : JSR prtext
+    LDA #3 : LDX #1 : JSR setcolour
+    LDA #20 : STA tcol : LDA #1 : STA trow
+    LDA uxbsecs : CMP #10 : BCC one
+    LDA #'1' : JSR putchar : LDA #'0' : JMP putchar
+.one
+    CLC : ADC #'0' : JSR putchar : LDA #' ' : JMP putchar
+}
+
+.solid                  \ X = column, Y = row: Z clear if anything's there
+    JSR getcell : AND #&FF
+    RTS
+
+\ ===========================================================================
+\  Apples, gold and crates
+\ ===========================================================================
+.updthings
+{
+    LDA #NTHINGS-1 : STA ti
+.loop
+    LDX ti : LDA tt,X
+    BNE some
+    JMP next
+.some
+    CMP #T_BANG : BCC ph
+    BEQ bang
+    CMP #T_KBANG : BEQ kbang
+    CMP #T_WAIT : BEQ wait
+    CMP #T_REFORM : BEQ reform
+    CMP #T_GHOST : BEQ ghost
+    DEC ttim,X : BNE nx2                \ T_CRWAIT: a crate on its way back
+    JSR placecrate
+.nx2 JMP next
+.ph JSR physics : JMP next
+.bang
+    DEC ttim,X : BNE next
+    LDA #T_NONE : STA tt,X : JMP next
+.kbang
+    DEC ttim,X : BNE next
+    LDA #T_WAIT : STA tt,X : JMP next
+.wait
+    LDA tx,X : STA rx : LDA ty,X : STA ry
+    JSR rectman : BCC next
+    LDX ti : LDA #T_REFORM : STA tt,X : LDA #25 : STA ttim,X
+    JMP next
+.reform
+    DEC ttim,X : BNE next
+    LDA #T_GHOST : STA tt,X
+.ghost
+    LDX ti
+    LDA tx,X : STA rx : LDA ty,X : STA ry
+    JSR rectman : BCS next
+    JSR rectobj : BCS next
+    JSR rectmap : AND #P_BLOCKOBJ : BNE next
+    LDX ti : LDA #T_APPLE : STA tt,X
+    LDA #0 : STA tvx,X : STA tvy,X
+.next
+    DEC ti : BMI fin
+    JMP loop
+.fin
+    RTS
+}
+
+.physics
+{
+    LDX ti
+    LDA tvy,X : BMI fall
+    JSR support
+    LDX ti
+    LDA scnt : CMP #2 : BCS horiz
+    CMP #1 : BEQ tip
+.fall
+    LDA tvy,X : CLC : ADC #GRAV : BMI setvy
+    CMP #MAXVY : BCC setvy : LDA #MAXVY
+.setvy
+    STA tvy,X
+    JMP horiz
+.tip
+    LDA #0 : STA tvy,X
+    LDA tvx,X : BNE horiz
+    LDA smask : AND #3 : BNE slipr
+    LDA #256-TIPV : STA tvx,X : JMP horiz
+.slipr
+    LDA #TIPV : STA tvx,X
+.horiz
+    LDA tvx,X : BEQ movex : BMI neg
+    SEC : SBC #FRIC : BPL sv : LDA #0 : JMP sv
+.neg CLC : ADC #FRIC : BMI sv : LDA #0
+.sv STA tvx,X
+.movex
+    LDA txf,X : CLC : ADC tvx,X : STA t0
+    AND #31 : STA txf,X
+    LDA t0 : CMP #&80 : ROR A : CMP #&80 : ROR A : CMP #&80 : ROR A
+    CMP #&80 : ROR A : CMP #&80 : ROR A
+    STA nsteps
+    LDA #0 : STA sdy
+.xl LDA nsteps : BEQ movey
+    BMI xleft
+    DEC nsteps : LDA #1 : STA sdx : JMP xs
+.xleft
+    INC nsteps : LDA #&FF : STA sdx
+.xs JSR stepthing : BCC xl
+    LDX ti : LDA #0 : STA txf,X
+.movey
+    LDX ti : LDA tt,X : BEQ done : CMP #T_BANG : BCS done
+    LDA tyf,X : CLC : ADC tvy,X : STA t0
+    AND #15 : STA tyf,X
+    LDA t0 : CMP #&80 : ROR A : CMP #&80 : ROR A : CMP #&80 : ROR A
+    CMP #&80 : ROR A
+    STA nsteps
+    LDA #0 : STA sdx
+.yl LDA nsteps : BEQ done
+    BMI yup
+    DEC nsteps : LDA #1 : STA sdy : JMP ys
+.yup
+    INC nsteps : LDA #&FF : STA sdy
+.ys JSR stepthing : BCC yl
+    LDX ti : LDA #0 : STA tyf,X
+.done
+    RTS
+}
+
+.stepthing
+{
+    LDX ti
+    LDA tx,X : CLC : ADC sdx : STA nnx : STA rx
+    LDA ty,X : CLC : ADC sdy : STA nny : STA ry
+    JSR rectmap : STA t1
+    AND #P_GATE : BEQ nogate
+    LDX ti : LDA tt,X : CMP #T_BOX : BCS bnc
+    LDA t1 : AND #P_BLOCKOBJ : BNE bnc
+    LDA #0 : STA train
+    LDX ti : JSR throughgate
+    SEC : RTS
+.bnc JMP bounce
+.nogate
+    LDA t1 : AND #P_BLOCKOBJ : BNE bnc
+    JSR rectman : BCS bnc
+    LDX ti : LDA #1 : STA tmark,X
+    JSR rectobj
+    LDY ti : LDA #0 : STA tmark,Y
+    BCC noobj
+    STX tj
+    \ an apple landing on an apple: the one underneath explodes
+    LDA sdy : CMP #1 : BNE hit
+    LDY ti : LDA tt,Y : CMP #T_BOX : BCS hit
+    LDA tt,X : CMP #T_BOX : BCS hit
+    JSR landbang
+    SEC : RTS
+.hit
+    LDX tj : JSR canmove : BCC bnc
+    LDA sdx : BEQ hitv
+    LDX ti : LDA tvx,X : JSR halve : LDX tj : STA tvx,X
+    LDX ti : LDA #0 : STA tvx,X
+    SEC : RTS
+.hitv
+    LDX ti : LDA tvy,X : JSR halve : LDX tj : STA tvy,X
+    LDX ti : LDA #0 : STA tvy,X
+    SEC : RTS
+.noobj
+    JSR rectmon : BCC free
+    JSR killmon
+.free
+    LDX ti
+    LDA nnx : STA tx,X : LDA nny : STA ty,X
+    CLC : RTS
+.bounce
+    LDX ti
+    LDA sdx : BEQ bv
+    LDA tvx,X : JSR halve : EOR #&FF : CLC : ADC #1
+    LDY #4 : JSR smallv : STA tvx,X
+    SEC : RTS
+.bv LDA tvy,X : CMP #&80 : BCS quiet : CMP #32 : BCC quiet
+    LDX #snd_thud-sounds : JSR sound
+    LDX ti : LDA tvy,X
+.quiet
+    JSR halve : EOR #&FF : CLC : ADC #1
+    LDY #12 : JSR smallv : STA tvy,X
+    SEC : RTS
+}
+
+.halve
+    CMP #&80 : ROR A
+    BPL h1 : ADC #0
+.h1 RTS
+
+.smallv
+{
+    STY t2 : STA t3
+    CMP #&80 : BCC pos : EOR #&FF : CLC : ADC #1
+.pos CMP t2 : BCS keep
+    LDA #0 : RTS
+.keep
+    LDA t3 : RTS
+}
+
+.support
+{
+    LDX ti : LDA #0 : STA smask
+    LDA tx,X : STA t0
+    LDA ty,X : CLC : ADC #16 : STA t5
+    LDA ty,X : AND #7 : BNE others
+    LDA t5 : LSR A : LSR A : LSR A : TAY
+    LDA #0 : STA t6
+.mb LDA t0 : CLC : ADC t6 : LSR A : TAX
+    JSR getcell : TAX : LDA props,X : AND #P_BLOCKOBJ+P_GATE : BEQ mn
+    LDX t6 : LDA bitof,X : ORA smask : STA smask
+.mn INC t6 : LDA t6 : CMP #4 : BNE mb
+.others
+    LDA #NTHINGS-1 : STA t6
+.ol LDX t6 : CPX ti : BEQ on
+    LDA tt,X : BEQ on : CMP #T_BANG : BCS on
+    LDA ty,X : CMP t5 : BNE on
+    LDA tx,X : JSR overlapbits : ORA smask : STA smask
+.on DEC t6 : BPL ol
+    LDA my : CMP t5 : BNE nm
+    LDA mx : JSR overlapbits : ORA smask : STA smask
+.nm LDX smask : LDA popc,X : STA scnt
+    RTS
+}
+.bitof EQUB 1,2,4,8
+.popc EQUB 0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4
+
+.overlapbits
+{
+    SEC : SBC t0 : BMI neg
+    CMP #4 : BCS none
+    TAY : LDA lmasks,Y : RTS
+.neg
+    CMP #&FD : BCC none
+    EOR #&FF : TAY : LDA rmasks,Y : RTS
+.none
+    LDA #0 : RTS
+}
+.lmasks EQUB 15,14,12,8
+.rmasks EQUB 7,3,1
+
+\ ===========================================================================
+\  Leaving the screen, and the tally
+\ ===========================================================================
+.throughgate            \ X = thing
+{
+    LDA tt,X : CMP #T_BOX : BNE notcrate
+    \ a crate delivered out of the top: a ball, and it'll be back
+    LDA #T_CRWAIT : STA tt,X : LDA #CRATEBACK : STA ttim,X
+    LDA #T_BOX : STA tvx,X
+    LDA sdy : BNE top
+    STA train                           \ shoved out of a side chute: it
+    LDX #snd_thud-sounds : JMP sound    \ just comes back somewhere else
+.top
+    LDA balls : CMP #MAXBALLS : BCS full : INC balls
+.full
+    JSR printball
+    LDA #&00 : LDX #&05 : JSR addscore  \ 500
+    LDX #snd_life-sounds : JMP sound
+.notcrate
+    CMP #T_GOLD : BNE apple
+    LDA #T_NONE : STA tt,X              \ gold: 1000 points, not counted
+    LDA #&00 : LDX #&10 : JSR addscore
+    LDX #snd_gold-sounds : JMP sound
+.apple
+    LDA #T_NONE : STA tt,X
+    LDA #&50 : LDX #&02 : JSR addscore  \ 250
+    LDX #snd_gate-sounds : JSR sound
+    JMP addtally
+}
+
+.landbang               \ X = the one underneath: it explodes
+{
+    LDA tt,X : STA t9
+    LDA #T_BANG : STA tt,X : LDA #10 : STA ttim,X
+    LDA #0 : STA tvx,X : STA tvy,X : STA train
+    LDX #snd_bang-sounds : JSR sound
+    LDA t9 : CMP #T_APPLE : BNE r       \ only real apples count
+    LDA #&50 : LDX #&02 : JSR addscore
+    JMP addtally
+.r  RTS
+}
+
+.addtally
+{
+    INC tally : JSR printtally
+    LDA tally : CMP #NAPPLES : BNE r
+    LDA train : CMP #NAPPLES : BNE open
+    LDA levbin : CMP #18 : BCS again
+    LDA #10 : STA t9            \ super bonus: ten times the bonus
+.sb LDA bonus+1 : LDX bonus : JSR addscore
+    DEC t9 : BNE sb
+    LDA #1 : STA superflag      \ and four levels on
+    LDX #LO(msg_super) : LDY #HI(msg_super) : JSR prtext
+    LDX #snd_super-sounds : JSR sound
+.open
+    JMP openexit
+.again
+    \ not above level 17: the apples go back where they started
+    LDA lay : ASL A : ASL A : ASL A : TAY
+    LDX #0
+.ra LDA thingx,Y : STA tx,X : LDA thingy,Y : STA ty,X
+    LDA #T_APPLE : STA tt,X
+    LDA #0 : STA tvx,X : STA tvy,X : STA txf,X : STA tyf,X
+    INY : INX : CPX #NAPPLES : BNE ra
+    LDA #0 : STA tally : STA train
+    JMP printtally
+.r  RTS
+}
+
+.placecrate
+\ put crate (or gold) X somewhere random
+{
+    STX t8
+    JSR findspot : BCC fail
+    LDX t8
+    LDA rx : STA tx,X : LDA ry : STA ty,X
+    LDA tvx,X : BNE k : LDA #T_BOX
+.k  STA tt,X
+    LDA #0 : STA tvx,X : STA tvy,X : STA txf,X : STA tyf,X
+    LDX #snd_thud-sounds : JMP sound
+.fail
+    LDX t8 : LDA #1 : STA ttim,X        \ no luck: try again next frame
+    RTS
+}
+
+\ findspot: a random place (rx, ry) in stuff or a tunnel, away from the
+\ man and the entrance, clear of monsters, things, walls, chutes and the
+\ UXB; digs it out. Carry clear if 8 tries found nowhere.
+.findspot
+{
+    LDA #8 : STA t10
+    JMP try
+.again
+    DEC t10 : BNE try
+    CLC : RTS
+.try
+    JSR rnd : AND #63 : CMP #37 : BCS again
+    CLC : ADC #1 : ASL A : STA rx       \ column 1-37
+    JSR rnd : AND #31 : CMP #22 : BCS again
+    CLC : ADC #TOPROW+1 : ASL A : ASL A : ASL A : STA ry   \ row 1-22
+    JSR rectmap : AND #P_BLOCKMAN+P_CUP+P_GATE+P_EXIT+P_HARD : BNE again
+    JSR rectman : BCS again
+    JSR rectobj : BCS again
+    JSR rectmon : BCS again
+    LDA uxbon : BEQ nu                  \ not on the UXB
+    LDA uxbx : SEC : SBC rx : BCS u1 : EOR #&FF : ADC #1
+.u1 CMP #6 : BCS nu
+    LDA uxby : SEC : SBC ry : BCS u2 : EOR #&FF : ADC #1
+.u2 CMP #20 : BCC again
+.nu LDA mx : SEC : SBC rx : BCS m1 : EOR #&FF : ADC #1    \ not near the man
+.m1 CMP #12 : BCS far
+    LDA my : SEC : SBC ry : BCS m2 : EOR #&FF : ADC #1
+.m2 CMP #32 : BCC ag
+.far
+    LDA rx : CMP #12 : BCS ok           \ keep away from the entrance
+    LDA entr : ASL A : ASL A : ASL A : SEC : SBC ry : BCS p : EOR #&FF : ADC #1
+.p  CMP #24 : BCC ag
+.ok
+    JSR dig                             \ make room for it
+    SEC : RTS
+.ag JMP again
+}
+
+.openexit
+    LDA #1 : STA exitopen
+    LDX #39 : LDY exitr : LDA #C_EXITOPEN : JSR setcell
+    INY : LDA #C_EXITOPEN : JSR setcell
+    LDX #snd_open-sounds : JMP sound
+
+\ ===========================================================================
+\  Monsters: A and B follow the tunnels, C digs. They come out of the cup.
+\ ===========================================================================
+.updmons
+{
+    LDA #NMON-1 : STA hk
+.loop
+    LDX hk : LDA nst,X : BEQ next
+    CMP #2 : BNE alive
+    DEC ntim,X : BNE next
+    LDA #0 : STA nst,X : JMP next
+.alive
+    LDY nty,X : LDA monspeed,Y : CLC : ADC levspeed
+    ADC nacc,X : STA nacc,X
+    BCC next
+    JSR monstep
+.next
+    DEC hk : BPL loop
+    RTS
+}
+.monspeed EQUB 80, 112, 56
+.monmask  EQUB P_BLOCKMAN+P_DIG+P_EXIT, P_BLOCKMAN+P_DIG+P_EXIT, P_BLOCKMAN+P_EXIT
+
+.monstep
+{
+    LDX hk
+    LDA nx,X : AND #1 : BNE straight
+    LDA ny,X : AND #7 : BNE straight
+    JSR choosedir
+.straight
+    LDX hk : LDA nd,X : JSR monfree : BCC blocked
+    LDX hk
+    LDA rx : STA nx,X : LDA ry : STA ny,X
+    INC nan,X
+    LDA nty,X : CMP #2 : BNE r
+    JSR dig
+.r  RTS
+.blocked
+    LDX hk : LDA nd,X : EOR #1 : STA nd,X
+    RTS
+}
+
+.monfree
+{
+    JSR dirstep
+    LDX hk
+    LDA nx,X : CLC : ADC sdx : STA rx
+    LDA ny,X : CLC : ADC sdy : STA ry
+    JSR rectmap
+    LDX hk : LDY nty,X : AND monmask,Y : BNE no
+    JSR rectobj : BCS no
+    SEC : RTS
+.no CLC : RTS
+}
+
+.choosedir
+{
+    LDX hk
+    LDA mx : SEC : SBC nx,X : STA t4
+    LDA #D_RIGHT : BCS h : LDA #D_LEFT
+.h  STA t5
+    LDA my : SEC : SBC ny,X : STA t6
+    LDA #D_DOWN : BCS v : LDA #D_UP
+.v  STA t7
+    LDA t4 : BPL a1 : EOR #&FF : CLC : ADC #1
+.a1 ASL A : ASL A : STA t4
+    LDA t6 : BPL a2 : EOR #&FF : CLC : ADC #1
+.a2 CMP t4 : BCS vfirst
+    LDA t5 : STA order : LDA t7 : STA order+1 : JMP fill
+.vfirst
+    LDA t7 : STA order : LDA t5 : STA order+1
+.fill
+    LDA order+1 : EOR #1 : STA order+2
+    LDA order : EOR #1 : STA order+3
+    JSR rnd : AND #3 : BNE keep      \ a quarter of the time, muddle it
+    JSR rnd : AND #3 : TAX
+    LDA order : PHA : LDA order,X : STA order : PLA : STA order,X
+.keep
+    LDA #0 : STA t8
+.try
+    LDX t8 : LDA order,X : STA t9
+    LDX hk : LDA nd,X : EOR #1 : CMP t9 : BEQ skip
+    LDA t9 : JSR monfree : BCC skip
+    LDX hk : LDA t9 : STA nd,X
+    RTS
+.skip
+    INC t8 : LDA t8 : CMP #4 : BNE try
+    LDX hk : LDA nd,X : EOR #1 : AND #3 : STA nd,X   \ dead end: back
+    RTS
+}
+
+.spawn
+{
+    LDX #NMON-1 : LDY #0                \ how many out already?
+.c  LDA nst,X : BEQ c1 : INY
+.c1 DEX : BPL c
+    CPY #0 : BNE w                      \ none left: the next one hurries
+    LDA spawntim : CMP #50 : BCC w
+    LDA #50 : STA spawntim
+.w  LDA spawntim : BEQ go
+    DEC spawntim : RTS
+.go CPY maxmon : BCS r
+    LDA cupc : ASL A : STA rx : LDA cupr : ASL A : ASL A : ASL A : STA ry
+    JSR rectman : BCS r
+    JSR rectobj : BCS r
+    JSR rectmon : BCS r
+    LDX #NMON-1
+.f  LDA nst,X : BEQ found
+    DEX : BPL f
+.r  RTS
+.found
+    LDA #1 : STA nst,X
+    LDA rx : STA nx,X : LDA ry : STA ny,X
+    LDA #4 : STA nd,X                   \ no direction yet: it can go any way
+    LDA #0 : STA nacc,X : STA nan,X
+    \ level 1: only A; level 2: A and B; then all three
+    LDA spawned : LDY levbin : CPY #2 : BCC onlya
+    LDY #2 : CPY levbin : BEQ mod2
+.m3 CMP #3 : BCC t : SBC #3 : JMP m3
+.mod2 AND #1 : JMP t
+.onlya LDA #0
+.t  STA nty,X
+    INC spawned
+    LDA #200 : STA spawntim
+    RTS
+}
+
+.killmon                \ X = monster
+    LDA #2 : STA nst,X : LDA #10 : STA ntim,X
+    LDA #&00 : LDX #&05 : JSR addscore          \ 500
+    LDX #snd_squash-sounds : JMP sound
+
+.checkhit
+{
+    LDX #NMON-1
+.l  LDA nst,X : CMP #1 : BNE n
+    LDA nx,X : SEC : SBC mx : BCS p1 : EOR #&FF : ADC #1
+.p1 CMP #3 : BCS n
+    LDA ny,X : SEC : SBC my : BCS p2 : EOR #&FF : ADC #1
+.p2 CMP #10 : BCS n
+    SEC : RTS
+.n  DEX : BPL l
+    CLC : RTS
+}
+
+\ ===========================================================================
+\  Score, bonus, time, lives
+\ ===========================================================================
+\ addscore: A = amount for the last two digits, X = for the middle two
+\ (BCD). An extra life every 10,000.
+.addscore
+{
+    STX t2 : PHA : LDA score : STA t1 : PLA
+    SEI : SED : CLC
+    ADC score+2 : STA score+2
+    LDA score+1 : ADC t2 : STA score+1
+    LDA score : ADC #0 : STA score
+    CLD : CLI
+    LDA score : CMP t1 : BEQ nolife
+    LDA lives : CMP #9 : BCS nolife
+    INC lives : JSR printlives
+    LDX #snd_life-sounds : JSR sound
+.nolife
+    JSR checkhigh
+    JMP printscore
+}
+
+.checkhigh
+{
+    LDA score : CMP high : BCC no : BNE yes
+    LDA score+1 : CMP high+1 : BCC no : BNE yes
+    LDA score+2 : CMP high+2 : BCC no
+.yes
+    LDA score : STA high : LDA score+1 : STA high+1 : LDA score+2 : STA high+2
+.no RTS
+}
+
+\ the bonus drops by 100 every 5 seconds and stops at nothing;
+\ TIME drops by 1 every fifth of a second, and at nothing you're out
+.timer
+{
+    INC ttick : LDA ttick : CMP #5 : BCC b
+    LDA #0 : STA ttick
+    LDA time : ORA time+1 : BEQ b
+    SEI : SED : SEC
+    LDA time+1 : SBC #1 : STA time+1
+    LDA time : SBC #0 : STA time
+    CLD : CLI
+    JSR printtime
+.b  INC btick : LDA btick : CMP #125 : BCC r
+    LDA #0 : STA btick
+    LDA bonus : ORA bonus+1 : BEQ r
+    SEI : SED : SEC : LDA bonus : SBC #1 : STA bonus : CLD : CLI
+    JMP printbonus
+.r  RTS
+}
+
+.die
+{
+    LDA #12 : STA t9
+.flash
+    LDA #19 : JSR OSBYTE : LDA #19 : JSR OSBYTE : LDA #19 : JSR OSBYTE
+    LDA sf : CMP #NOSPR : BEQ show
+    LDX #0 : JSR eraseslot : JMP snd
+.show
+    LDA wf : STA sf : LDA wx : STA sx : STA px : LDA wy : STA sy : STA py
+    LDA sf : JSR plotf
+.snd
+    LDA t9 : ASL A : ASL A : ASL A : CLC : ADC #60 : STA snd_die+4
+    LDX #snd_die-sounds : JSR sound
+    DEC t9 : BNE flash
+    LDA #NOSPR : STA wf
+    LDX #NMON-1
+.m  LDA nst,X : CMP #1 : BNE mn
+    DEC spawned                         \ it'll come out again
+.mn LDA #0 : STA nst,X
+    LDA #NOSPR : STA wf+SLOT_MON,X
+    DEX : BPL m
+    LDA #0 : STA ballon : STA boom
+    JSR resetuxb : JSR printuxb
+    LDA #NOSPR : STA wf+SLOT_UXB
+    JSR render
+    DEC lives : JSR printlives
+    LDA lives : BEQ over
+    JSR resetman
+    JSR resettime : JSR printtime : JSR printball
+    LDA #150 : STA spawntim
+    LDA #50 : JSR pause
+    LDA #0 : STA vcount
+    JMP mainloop
+.over
+    JSR checkhigh
+    LDX #LO(msg_over) : LDY #HI(msg_over) : JSR prtext
+    LDA #200 : JSR pause
+    JMP titleloop
+}
+
+.levelcomplete
+{
+    LDA #NOSPR : STA wf : STA wf+SLOT_BALL : JSR render
+    LDX #LO(msg_done) : LDY #HI(msg_done) : JSR prtext
+.count
+    LDA bonus : ORA bonus+1 : BEQ counted
+    SEI : SED : SEC : LDA bonus : SBC #1 : STA bonus : CLD : CLI
+    LDA #0 : LDX #1 : JSR addscore
+    JSR printbonus
+    LDX #snd_count-sounds : JSR sound
+    LDA #2 : JSR pause
+    JMP count
+.counted
+    LDA #1 : LDX superflag : BEQ one : LDA #4
+.one STA t9
+.lv SEI : SED : CLC : LDA level : ADC #1 : STA level : CLD : CLI
+    INC levbin
+    DEC t9 : BNE lv
+    LDA #100 : JSR pause
+    JMP newlevel
+}
+
+\ ===========================================================================
+\  Title screen
+\ ===========================================================================
+.titlescreen
+{
+    JSR clearscreen
+    JSR hideall
+    LDA #3 : STA tfg : LDA #13 : STA tcol : LDA #2 : STA trow
+    LDX #0
+.c1 LDA word1,X : BEQ d1
+    STX t10 : JSR putbig : LDX t10 : INX : JMP c1
+.d1 LDA #1 : STA tfg : LDA #15 : STA tcol : LDA #6 : STA trow
+    LDX #0
+.c2 LDA word2,X : BEQ d2
+    STX t10 : JSR putbig : LDX t10 : INX : JMP c2
+.d2 LDX #LO(titletext) : LDY #HI(titletext) : JSR prtext
+    LDA #3 : LDX #0 : JSR setcolour
+    LDA #22 : STA tcol : LDA #25 : STA trow
+    LDA high : JSR prbcd : LDA high+1 : JSR prbcd : LDA high+2 : JSR prbcd
+    JMP waitspace
+.word1 EQUS "CHUCKIE",0
+.word2 EQUS "APPLE",0
+}
