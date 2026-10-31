@@ -37,7 +37,7 @@ Dig through the stuff and get all six apples off the screen through the three ar
 
 - **Undermine an apple** and it falls — onto monsters, if you time it right. An apple landing on another apple smashes the lower one (and that counts).
 - **Walk under an apple** and it rides on your head. Carry it up the middle shaft and out of the top chute. Tap SPACE to pop it up, then step away — it drops behind you onto whatever's chasing you.
-- **Push apples** sideways (several at once is harder work), or **kick** them and they slide. Kick one that can't move and it explodes — it comes back as a ghost when you next walk through where it was.
+- **Push apples** sideways (several at once is harder work), or **kick** them and they slide. Kick one that can't move and it explodes — a few seconds later it comes back where it was.
 - **Super bonus:** push all six out of a chute in one unbroken line for ten times the bonus, and four levels on.
 - **Crates:** hold SPACE and walk away to pull one. Carry one out of the top chute to earn a **ball** (hold up to three); the crate turns up again somewhere else. A crate stuck on the bottom can be shoved out of a side chute.
 - **The ball** bounces round the tunnels and kills the first monster it meets. Hit a crate with it and it becomes a **golden apple** — get it out of any chute for an **extra life** (up to 9).
@@ -51,18 +51,19 @@ In true 8-bit tradition, you can change how the game plays by poking new values 
 
 ```
 *LOAD APPLE          (disc)   or   *TAPE  then  *LOAD ""   (tape)
-?&2D79=75
+?&2D74=75
 CALL &421B
 ```
 
 | Poke | What it does | Normal |
 |---|---|---|
-| `?&2D79=n` | How long a crate stays away after you shove it out of a chute, in 25ths of a second. If you can't escape before the last crate comes back, try 75 (3 s) or 125 (5 s). Up to 255. | 50 (2 s) |
+| `?&2D74=n` | How long a crate stays away after you shove it out of a chute, in 25ths of a second. If you can't escape before the last crate comes back, try 75 (3 s) or 125 (5 s). Up to 255. | 50 (2 s) |
 | `?&1945=n` | Lives at the start (1–9) | 5 |
 | `?&194F=n` | Balls at the start (0–3) | 0 |
-| `?&2FB3=n` `?&2FB4=n` `?&2FB5=n` | Speed of the three monsters (cyan, red, digger) — lower is slower. Keep them under 200. | 80, 112, 56 |
+| `?&2FAE=n` `?&2FAF=n` `?&2FB0=n` | Speed of the three monsters (cyan, red, digger) — lower is slower. Keep them under 200. | 80, 112, 56 |
 | `?&22BF=n` | Hundreds digit of the TIME you start each life with (1–9) | 9 |
 | `?&345E=0` `?&345F=0` | Silence the footsteps | &FC, &FF |
+| `?&3347=n` | The lowest note of the bonus count at the end of a level — higher is a higher tune (keep it under 100) | 60 |
 
 To turn off all sound, type `*FX210,1` before starting the game (`*FX210,0` turns it back on).
 
