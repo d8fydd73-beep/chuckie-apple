@@ -42,16 +42,17 @@ Dig through the stuff and get all six apples off the screen through the three ar
 - **Crates:** hold SPACE and walk away to pull one. Carry one out of the top chute to earn a **ball** (hold up to three); the crate turns up again somewhere else. A crate stuck on the bottom can be shoved out of a side chute.
 - **The ball** bounces round the tunnels and kills the first monster it meets. Hit a crate with it and it becomes a **golden apple** — get it out of any chute for an **extra life** (up to 9).
 - **UXB apples** (orange) turn up with a 10-second fuse. Walk into one to defuse it — or it blows a crater in the stuff, and you with it if you're close.
+- **The gold cup** is worth 1000 points, and it's the monster nest: they keep hatching there even once it's gone. Leave anything on the nest and the next monster out bursts it.
 - Anything pushed, lifted, dropped or kicked into a monster squashes it. Watch the TIME, and there's an extra life every 10,000 points.
 
 ## Pokes
 
-In true 8-bit tradition, you can change how the game plays by poking new values into it before it runs. Load it without running it, poke, then start it with `CALL &4218`:
+In true 8-bit tradition, you can change how the game plays by poking new values into it before it runs. Load it without running it, poke, then start it with `CALL &421B`:
 
 ```
 *LOAD APPLE          (disc)   or   *TAPE  then  *LOAD ""   (tape)
 ?&2D79=75
-CALL &4218
+CALL &421B
 ```
 
 | Poke | What it does | Normal |
@@ -61,14 +62,14 @@ CALL &4218
 | `?&194F=n` | Balls at the start (0–3) | 0 |
 | `?&2FB3=n` `?&2FB4=n` `?&2FB5=n` | Speed of the three monsters (cyan, red, digger) — lower is slower. Keep them under 200. | 80, 112, 56 |
 | `?&22BF=n` | Hundreds digit of the TIME you start each life with (1–9) | 9 |
-| `?&345B=0` `?&345C=0` | Silence the footsteps | &FC, &FF |
+| `?&345E=0` `?&345F=0` | Silence the footsteps | &FC, &FF |
 
 To turn off all sound, type `*FX210,1` before starting the game (`*FX210,0` turns it back on).
 
 To keep your changes, save it after poking (disc):
 
 ```
-*SAVE APPLE FFFF1900 +293D FFFF4218
+*SAVE APPLE FFFF1900 +2940 FFFF421B
 ```
 
 ## Source
