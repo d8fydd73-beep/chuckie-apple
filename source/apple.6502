@@ -36,7 +36,9 @@ LOADADDR = &1900        \ where the file loads
 T_NONE = 0 : T_APPLE = 1 : T_GOLD = 2 : T_BOX = 3
 T_BANG = 4              \ exploding, then gone for good
 T_KBANG = 5             \ exploding after a kick, will come back
-T_WAIT = 6              \ invisible, waiting for the man to walk through
+T_WAIT = 6              \ invisible for a while, then it comes back
+COUNTBASE = 60          \ lowest note of the bonus count
+REFORMTIME = 100        \ frames before a burst apple comes back (4 s)
 T_REFORM = 7            \ exploding in reverse
 T_GHOST = 8             \ outline, waiting for the man to get out of the way
 T_CRWAIT = 9            \ a delivered crate, about to turn up somewhere else
@@ -786,22 +788,22 @@ INCLUDE "play.6502"
     LDA #7 : JMP OSWORD
 }
 .sounds
-.snd_kick  EQUW &12 : EQUW &FFF4 : EQUW 120 : EQUW 1
-.snd_gate  EQUW &11 : EQUW &FFF1 : EQUW 200 : EQUW 4
-.snd_bang  EQUW &10 : EQUW &FFF1 : EQUW 6   : EQUW 4
+.snd_kick  EQUW &12 : EQUW &FFF6 : EQUW 100 : EQUW 1
+.snd_gate  EQUW &11 : EQUW &FFF6 : EQUW 152 : EQUW 4
+.snd_bang  EQUW &10 : EQUW &FFF6 : EQUW 6   : EQUW 4
 .snd_thud  EQUW &13 : EQUW &FFF8 : EQUW 20  : EQUW 1
-.snd_squash EQUW &12 : EQUW &FFF1 : EQUW 60 : EQUW 3
-.snd_cup   EQUW &11 : EQUW &FFF1 : EQUW 220 : EQUW 4
-.snd_open  EQUW &11 : EQUW &FFF1 : EQUW 160 : EQUW 12
-.snd_die   EQUW &11 : EQUW &FFF1 : EQUW 100 : EQUW 2
-.snd_count EQUW &13 : EQUW &FFF6 : EQUW 220 : EQUW 1
-.snd_super EQUW &11 : EQUW &FFF1 : EQUW 250 : EQUW 20
+.snd_squash EQUW &12 : EQUW &FFF5 : EQUW 52 : EQUW 3
+.snd_cup   EQUW &11 : EQUW &FFF6 : EQUW 160 : EQUW 4
+.snd_open  EQUW &11 : EQUW &FFF6 : EQUW 128 : EQUW 12
+.snd_die   EQUW &11 : EQUW &FFF5 : EQUW 80  : EQUW 2
+.snd_count EQUW &13 : EQUW &FFF8 : EQUW 100 : EQUW 2   \ pitch set as it counts
+.snd_super EQUW &11 : EQUW &FFF6 : EQUW 180 : EQUW 20
 .snd_step  EQUW &13 : EQUW &FFFC : EQUW 100 : EQUW 1   \ pitch set as he walks
-.snd_throw EQUW &12 : EQUW &FFF6 : EQUW 180 : EQUW 2
-.snd_gold  EQUW &11 : EQUW &FFF1 : EQUW 240 : EQUW 6
-.snd_life  EQUW &11 : EQUW &FFF1 : EQUW 228 : EQUW 10
-.snd_tick  EQUW &13 : EQUW &FFF6 : EQUW 200 : EQUW 1
-.snd_defuse EQUW &11 : EQUW &FFF1 : EQUW 180 : EQUW 6
+.snd_throw EQUW &12 : EQUW &FFF7 : EQUW 140 : EQUW 2
+.snd_gold  EQUW &11 : EQUW &FFF6 : EQUW 172 : EQUW 6
+.snd_life  EQUW &11 : EQUW &FFF6 : EQUW 168 : EQUW 10
+.snd_tick  EQUW &13 : EQUW &FFF8 : EQUW 152 : EQUW 1
+.snd_defuse EQUW &11 : EQUW &FFF6 : EQUW 140 : EQUW 6
 
 .rnd
 {
