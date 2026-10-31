@@ -1051,7 +1051,9 @@
 .go CPY maxmon : BCS r
     LDA cupc : ASL A : STA rx : LDA cupr : ASL A : ASL A : ASL A : STA ry
     JSR rectman : BCS r
-    JSR rectobj : BCS r
+    JSR rectobj : BCC clear
+    JMP landbang                        \ something parked on the nest: it bursts
+.clear
     JSR rectmon : BCS r
     LDX #NMON-1
 .f  LDA nst,X : BEQ found
